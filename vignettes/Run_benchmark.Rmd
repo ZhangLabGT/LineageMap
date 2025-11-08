@@ -1,0 +1,195 @@
+---
+title: "Run_benchmark"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Run_benchmark}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+.libPaths("~/LinRace/Rlib/")
+library("devtools")
+library("dplyr")
+library(ggplot2)
+library(SpaTedSim)
+library(plotly)
+library(TreeDist)
+library("TreeTools")
+#library(LineageMap)
+library(tidyverse)
+library(parallel)
+library(MASS)
+library(cluster)
+library(mclust)
+library("ggtree")
+load_all()
+```
+
+```{r}
+n_data <- 10
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+
+for (k in 1:n_data) {
+  set.seed(seeds[k])
+  print(sprintf("running test No. %i",k))
+  ncells <- 1024
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 0
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 0
+  N_char <- 50
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.05,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  muts <- drop_characters(muts,drop_rate = 0.2,mode = "row")
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  df_combined <- rbind(returnlist[[1]])
+  for (i in 1:(length(returnlist[[2]])-1)){
+    df_combined <- rbind(df_combined,returnlist[[2]][[i]])
+  }
+  
+  tree_init <- NJ_from_barcode(muts_leaves)
+  result_init <- LikelihoodCal_ST(tree_init, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
+  lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_init <- result_init$loc_data
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+  
+
+  # LineageMap (mode = "majority")
+  tree_lm_majority <- Build_LineageMap(muts_leaves, df_spatial_continuous, phyla,
+                                       threshold = 2/N_char, backbone_type = "majority")
+  res_lm_majority <- LikelihoodCal_ST(tree_lm_majority, muts_leaves, df_spatial_continuous$state,
+                                      phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_lm_majority <- res_lm_majority$loc_data
+
+  # LineageMap (mode = "NJ_median")
+  tree_lm_nj <- Build_LineageMap(muts_leaves, df_spatial_continuous, phyla,
+                                 threshold = 2/N_char, backbone_type = "NJ_median")
+  res_lm_nj <- LikelihoodCal_ST(tree_lm_nj, muts_leaves, df_spatial_continuous$state,
+                                phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_lm_nj <- res_lm_nj$loc_data
+  
+  # --- Coordinate MSE ---
+  df_benchmark <- df_combined %>% arrange(cellid)
+  gt_x <- c(df_benchmark$x[order], 0, df_benchmark$x[(ncells+1):(2*ncells - 2)])
+  gt_y <- c(df_benchmark$y[order], 0, df_benchmark$y[(ncells+1):(2*ncells - 2)])
+  
+  # Metrics helper
+  mse_fun <- function(loc) mean((loc$x - gt_x)^2) + mean((loc$y - gt_y)^2)
+  rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
+  nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
+  anc_fun <- function(t) {
+    tips <- tree_gt$tip.label
+    correct <- 0; total <- 0
+    for (tip in tips) {
+      anc_true <- Ancestors(tree_gt, tip, type = "all")
+      anc_infer <- Ancestors(t, tip, type = "all")
+      total <- total + length(anc_true)
+      correct <- correct + sum(anc_true %in% anc_infer)
+    }
+    correct / total
+  }
+  path_corr_fun <- function(t) {
+    common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
+    cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
+        as.vector(cophenetic(t)[common_tips, common_tips]))
+  }
+
+  # Compute all metrics
+  benchmark_results <- data.frame(
+    mse_nj = mse_fun(loc_init),
+    mse_lm_majority = mse_fun(loc_lm_majority),
+    mse_lm_nj = mse_fun(loc_lm_nj),
+
+    rf_nj = rf_fun(tree_init),
+    rf_lm_majority = rf_fun(tree_lm_majority),
+    rf_lm_nj = rf_fun(tree_lm_nj),
+
+    nye_nj = nye_fun(tree_init),
+    nye_lm_majority = nye_fun(tree_lm_majority),
+    nye_lm_nj = nye_fun(tree_lm_nj),
+
+    ancestor_accuracy_nj = anc_fun(tree_init),
+    ancestor_accuracy_lm_majority = anc_fun(tree_lm_majority),
+    ancestor_accuracy_lm_nj = anc_fun(tree_lm_nj),
+
+    path_length_corr_nj = path_corr_fun(tree_init),
+    path_length_corr_lm_majority = path_corr_fun(tree_lm_majority),
+    path_length_corr_lm_nj = path_corr_fun(tree_lm_nj)
+  )
+
+  df_stats <- rbind(df_stats, benchmark_results)
+}
+colnames(df_stats) <- c("mse_nj","mse_lm_majority","mse_lm_Q","rf_nj","rf_lm_majority","rf_lm_Q","nye_nj","nye_lm_majority","nye_lm_Q","ancestor_accuracy_nj","ancestor_accuracy_lm_majority","ancestor_accuracy_lm_Q","path_length_corr_nj","path_length_corr_lm_majority","path_length_corr_lm_Q")
+
+# Convert to long format
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_pattern = "(.*)_(nj|lm_majority|lm_Q)",
+    values_to = "value"
+  )
+
+# Visualization
+ggplot(df_long, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: NJ vs LineageMap (Majority & NJ_median)",
+    x = "Method",
+    y = "Metric Value"
+  ) +
+  scale_fill_manual(values = c(
+    "nj" = "skyblue",
+    "lm_majority" = "tomato",
+    "lm_Q" = "palegreen3"
+  ))
+```
+

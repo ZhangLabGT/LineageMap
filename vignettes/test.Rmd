@@ -1,0 +1,3445 @@
+---
+title: "test"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{test}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+.libPaths("~/LinRace/Rlib/")
+library("devtools")
+library("dplyr")
+library(ggplot2)
+library(SpaTedSim)
+library(plotly)
+library(TreeDist)
+library("TreeTools")
+#library(LineageMap)
+library(tidyverse)
+library(parallel)
+library(MASS)
+library(cluster)
+library(mclust)
+load_all()
+```
+
+```{r}
+starting_tree_from_data <- function(X,loc,lambda = 0.9) {
+  l <- dim(X)[1]
+  rownames(X) <- 1:l
+  
+  # ---- Barcode distances ----
+  sim_tree <- list()
+  for (j in 1:l) {
+    sim_tree[[j]] <- as.character(X[j, ])
+  }
+  names(sim_tree) <- rownames(X)
+  nmstrings <- unique(unlist(sim_tree))
+  sim_data <- phyDat(sim_tree, type = "USER", levels = nmstrings)
+  
+  dist_barcode <- as.matrix(dist.hamming(sim_data))
+  
+  # ---- Spatial distances ----
+  dist_spatial <- as.matrix(dist(loc, method = "euclidean"))
+  
+  # ---- Normalize both to [0,1] ----
+  dist_barcode <- dist_barcode / max(dist_barcode)
+  dist_spatial <- dist_spatial / max(dist_spatial)
+  
+  # ---- Weighted combination ----
+  dist_combined <- lambda * dist_barcode + (1 - lambda) * dist_spatial
+  
+  # ---- NJ tree ----
+  Treenj <- nj(as.dist(dist_combined))
+  tree <- multi2di(Treenj)
+  tree$edge.length <- rep(1, length(tree$edge.length))
+  
+  return(tree)
+}
+```
+
+```{r}
+drop_characters <- function(mat, drop_rate = 0.3, mode = c("global", "row", "col"), seed = NULL) {
+  mode <- match.arg(mode)
+  if (!is.null(seed)) set.seed(seed)
+  
+  mat_dropped <- mat
+  n_row <- nrow(mat)
+  n_col <- ncol(mat)
+  
+  if (mode == "global") {
+    # Drop randomly across the entire matrix
+    mask <- matrix(runif(length(mat)) < drop_rate, nrow = n_row)
+    
+  } else if (mode == "row") {
+    # Ensure similar drop rate in each row
+    mask <- matrix(FALSE, n_row, n_col)
+    for (i in seq_len(n_row)) {
+      mask[i, ] <- runif(n_col) < drop_rate
+    }
+    
+  } else if (mode == "col") {
+    # Ensure similar drop rate in each column
+    mask <- matrix(FALSE, n_row, n_col)
+    for (j in seq_len(n_col)) {
+      mask[, j] <- runif(n_row) < drop_rate
+    }
+  }
+  
+  mat_dropped[mask] <- "-"
+  return(mat_dropped)
+}
+```
+
+
+
+```{r}
+header <- '/project/xpan78/sim_spatedsim_continuous_1024/'
+ncells <- 1024
+mr <- 0
+r_d <- 3
+r_m <- 4
+run <- 3
+input <- load_spatedsim(header,ncells,mr,r_d,r_m,run)
+
+
+returnlist <- DivideMut(input$cm)
+(returnlist[[1]])
+```
+
+```{r}
+tree <- returnlist[[1]]
+tree <- reroot_balance(tree)
+```
+
+
+```{r}
+tree_nj <- NJ_from_barcode(input$cm)
+cloneid <- Define_clones(tree_nj)
+spatial_map <- input$spatial_map
+spatial_map$clone <- cloneid
+```
+
+```{r}
+cbbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+ggplot(spatial_map, aes(x = x, y = y, color = as.factor(clone))) +
+  geom_point() +
+  theme_void() +  # Equivalent to plt.axis('off')
+  scale_color_manual(values = cbbPalette)
+  scale_y_reverse()  # Equivalent to plt.gca().invert_yaxis()
+  
+  
+```
+```{r}
+#start a toy example to design the likelihood function
+newick_str <- "((((A:1,B:1):1,(A:1,B:1):1):1,((A:1,B:1):1,(A:1,B:1):1):1):2,(((A:1,B:1):1,(A:1,B:1):1):1,((A:1,B:1):1,(A:1,B:1):1):1):2);"
+
+# Read tree
+tree <- read.tree(text = newick_str)
+
+# Function to compute radial layout
+
+
+# Plot the tree in radial form
+
+#plot(coords$x, coords$y,  pch = 16,c=coords$ct)  # Overlay computed coordinates
+```
+
+```{r}
+library("ggtree")
+newick_str <- "((((1:1,2:1):1,(3:1,4:1):1):1,((5:1,6:1):1,(7:1,8:1):1):1):2,(((9:1,10:1):1,(11:1,12:1):1):1,((13:1,14:1):1,(15:1,16:1):1):1):2);"
+tree_gt <-  read.tree(text = newick_str)
+tree_gt$tip.label <- paste0("t",tree_gt$tip.label)
+# Read tree
+tree <- read.tree(text = newick_str)
+p <- ggtree(tree, layout = "circular") + geom_tiplab()
+
+# Extract node coordinates from ggtree object
+# tree_data <- p$data %>% select(node, branch, angle, label, isTip)
+# 
+# polar_to_cartesian <- function(r, theta) {
+#   # Convert polar coordinates to Cartesian coordinates
+#   # r: radius (numeric vector)
+#   # theta: angle in radians (numeric vector)
+#   x <- r * cos(theta/360)
+#   y <- r * sin(theta/360)
+#   return(data.frame(x = x, y = y))
+# }
+# 
+# df_cartesan <- polar_to_cartesian(tree_data$branch,tree_data$angle)
+# 
+# tree_data$x <- df_cartesan$x
+# tree_data$y <- df_cartesan$y
+
+tree_data <- p$data %>% select(node, x, y, branch, isTip)
+
+# Convert to true Cartesian coordinates
+tree_data <- tree_data %>%
+  mutate(
+    angle = (y / max(y)) * 2 * pi,  # Normalize x to get angles
+    radius = x,                     # Use y as radial distance
+    x_cartesian = radius * cos(angle), 
+    y_cartesian = radius * sin(angle)
+  )
+
+plot(tree_data$x_cartesian, tree_data$y_cartesian,  pch = 16,col=states)  # Overlay computed coordinates
+
+```
+
+```{r}
+states <- c(1,1,1,1,1,1,1,5,5,2,2,2,2,5,5,4,4,5,1,1,1,5,1,5,4,5,5,2,4,5,4)
+node_data <- data.frame(node = tree_data$node,class = as.character(states))
+p <- ggtree(tree, layout = "circular") %<+% node_data + 
+  geom_point(aes(color = class), size = 3) +  # Color nodes
+  scale_color_manual(values = c("1" = "red", "2" = "blue", "3" = "purple","4"="black","5"="green")) + 
+  theme_minimal()
+p
+```
+
+```{r}
+# calculate likelihood
+lambda2 <- 0.001
+muts <- input$cm[1:16,]
+tree <- NJ_from_barcode(muts)
+#tree <- rtree(16)
+#tree <- rtree(length(labels), rooted = TRUE, tip.label = labels)
+tree$edge.length <- rep(1, length(tree$edge.length))
+tree_init <- tree
+state_lineages <- read.tree(text='((1:4, (2:2, 3:2):2):2);')
+edges <- tree$edge
+#maxcl <- LikelihoodCal(tree,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+loc_data <- tree_data[1:16,]%>%select(x_cartesian,y_cartesian)
+colnames(loc_data) <- c("x","y")
+returnlist <- LikelihoodCal_ST(tree, input$cm, states[1:16], state_lineages, loc_data,lambda2 = lambda2)
+max_likelihood <- returnlist$likelihood
+loc_init <- returnlist$loc_data
+likelihood_curve <- c()
+seeds <- runif(10000, 1, 99999)
+best_tree <- tree
+best_tree_list <- list()
+maxl_list <- c()
+ptm <- proc.time()
+LikelihoodCal_time <- 0
+TreeLC_time <- 0
+maxIter <- 1000
+for (i in 1:maxIter) {
+  c_time <- proc.time()
+
+  tree_new <- TreeLC2(tree)
+  #tree_new <-  rNNI(tree,1,1)
+  TreeLC_time <- TreeLC_time + proc.time() - c_time
+  #cl <- LikelihoodCal(tree_new,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+  c_time <- proc.time()
+  returnlist <-LikelihoodCal_ST(tree_new, input$cm, states[1:16], state_lineages, loc_data,lambda2 = lambda2)
+  likelihood_new <- returnlist$likelihood
+  loc_infer <- returnlist$loc_data
+  #cl_list <- LikelihoodCal2(tree_new,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+  LikelihoodCal_time <- LikelihoodCal_time + proc.time() - c_time
+  likelihood_curve <- c(likelihood_curve, max_likelihood)
+  if (likelihood_new > max_likelihood) {
+    max_likelihood <- likelihood_new
+    tree <- tree_new
+    best_tree <- tree
+    best_loc <- loc_infer
+  }
+  if (i %% 100 == 0) {
+    likelihood_check <- sprintf("After %g iterations, the best likelihood is %g.",
+                                i, max_likelihood)
+    print(likelihood_check)
+  }
+  if (i > 100) {
+    if (length(unique(likelihood_curve[(i - 20):i])) == 1) {
+      #record the local optima, and
+      best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+      maxl_list <- c(maxl_list, max_likelihood)
+
+      tree <- tree_init
+      #tree <- rtree(length(labels), rooted = TRUE, tip.label = labels)
+      tree$edge.length <- rep(1, length(tree$edge.length))
+      #maxcl <- LikelihoodCal(tree,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+      returnlist <- LikelihoodCal_ST(tree, input$cm, states[1:16], state_lineages, loc_data,lambda2 = lambda2)
+      max_likelihood <- returnlist$likelihood
+      loc_infer <- returnlist$loc_data
+    }
+  }
+}
+total_time <- proc.time() - ptm
+total_time
+mse_init <- mean((loc_init$x - tree_data$x_cartesian)^2) + mean((loc_init$y - tree_data$y_cartesian)^2)
+mse_best <- mean((best_loc$x - tree_data$x_cartesian)^2) + mean((best_loc$y - tree_data$y_cartesian)^2)
+plot(best_tree)
+plot(best_loc$x, best_loc$y,  pch = 16,col=states)
+
+rf_init <- RF.dist(tree_gt,tree_init, normalize = TRUE)
+rf_best <- RF.dist(tree_gt,best_tree, normalize = TRUE)
+print(c(mse_init,mse_best,rf_init,rf_best))
+```
+
+```{r}
+LikelihoodCal_ST <- function(tree,muts,cell_state_labels,state_lineages,loc,lambda1 = 10,lambda2 = 0.1, err = 0.01) {
+  #browser()
+  N_char <- dim(muts)[2]
+  #Get the internal node ids
+  nodes_internal <- unique(tree$edge[,1])
+  #order the internal nodes
+  nodes_internal <- sort(nodes_internal, decreasing = TRUE)
+
+  #extend mutation table to include the internal nodes
+  allele_unique <- unique(unlist(muts))
+  muts <- rbind(muts,matrix(0,length(nodes_internal),N_char))
+  #cell_state_labels <- c(cell_state_labels,rep("0",length(nodes_internal)))
+  internal_lookup <- data.frame(node = numeric(),index = numeric())
+
+  #initialize transition frequencies
+  max_step <- max(sapply(state_lineages,length))
+  state_transitions <- data.frame(step = c(c(0:max_step)), freq = rep(0,max_step+1))
+  N_violations <- 0
+  total_dist <- 0
+  mutation_transitions <- data.frame(allele = allele_unique,freq = rep(0,length(allele_unique)))
+  total_muts <- 0
+
+  #determine ancestor barcode based on child barcodes
+  diffuse_loss <- 0
+  ad_loss <- 0
+  spatial_loss <- 0
+  p_a <- 0.8
+  m_r <- 0.8
+  for (node in nodes_internal){
+    children_index <- tree$edge[tree$edge[,1] == node,2]
+    children <- c()
+    leaf_counts <- 0
+    for (cell_id in children_index){
+      if (cell_id > length(tree$tip.label)){
+        cell_row <- internal_lookup$index[internal_lookup$node == cell_id]
+      }else {
+        # print(cell_id)
+        # leaf_counts <- leaf_counts + 1
+        # cell_id <- tree$tip.label[cell_id]
+        # if(substr(cell_id,1,1)=="c"){
+        #   cell_row <- strtoi(substr(cell_id,6,nchar(cell_id)))
+        # }else{
+        #   cell_row <- newick_lookup$index[newick_lookup$newick==cell_id]
+        # }
+        leaf_counts <- leaf_counts + 1
+        cell_row <- cell_id
+      }
+      children <- c(children, cell_row)
+    }
+    barcodes_children <- muts[children,]
+    cell_state_children <- cell_state_labels[children]
+
+    state_parent <- "0"
+    for (lineage in state_lineages){
+      match_child1 <- NA
+      match_child2 <- NA
+      match_child1 <- match(cell_state_children[1],lineage)
+      match_child2 <- match(cell_state_children[2],lineage)
+      if (is.na(match_child1) || is.na(match_child2)) next
+      state_parent <- lineage[min(match_child1,match_child2)]
+      state_dist <- abs(match_child1 - match_child2)
+      state_transitions[state_transitions$step == state_dist,2] <- state_transitions[state_transitions$step == state_dist,2] + 1
+      state_transitions[state_transitions$step == 0,2] <- state_transitions[state_transitions$step == 0,2] + 1
+      break
+    }
+
+    if (length(children) > 1){
+      for (i in 1:N_char){
+        characters <- unique(barcodes_children[,i])
+        if (length(characters) == 1){
+          muts[node,i] <- characters
+        }else{
+          muts[node,i] <- "0"
+          #browser()
+          mutation_transitions[mutation_transitions$allele == characters[1],2] <- mutation_transitions[mutation_transitions$allele == characters[1],2] + 1
+          mutation_transitions[mutation_transitions$allele == characters[2],2] <- mutation_transitions[mutation_transitions$allele == characters[2],2] + 1
+        }
+        total_muts <- total_muts + length(setdiff(characters, muts[node,i]))
+      }
+    }
+    
+    if (length(children) > 1){
+      #print(children)
+      loc_x1 <- loc$x[children[1]]
+      loc_x2 <- loc$x[children[2]]
+      loc_y1 <- loc$y[children[1]]
+      loc_y2 <- loc$y[children[2]]
+      if (cell_state_children[1] == cell_state_children[2]){
+        loc_x_parent <-(loc_x1 + loc_x2)/2 + rnorm(1)
+        loc_y_parent <- (loc_y1 + loc_y2)/2 + rnorm(1)
+        
+        spatial_loss <- spatial_loss + 2 * log2(1-m_r)
+      } else if (state_parent == cell_state_children[1]){
+        loc_x_parent <-0.9 * loc_x1 + 0.1 * loc_x2 + rnorm(1)
+        loc_y_parent <- 0.9 * loc_y1 + 0.1 * loc_y2  + rnorm(1)
+        
+        spatial_loss <- spatial_loss + log2(1-m_r) + log2(m_r)
+      } else{
+        loc_x_parent <-0.1 * loc_x1 + 0.9 * loc_x2 + rnorm(1)
+        loc_y_parent <- 0.1 * loc_y1 + 0.9 * loc_y2  + rnorm(1)
+        
+        spatial_loss <- spatial_loss + log2(1-m_r) + log2(m_r)
+      }
+      
+      spatial_loss <- spatial_loss - sqrt((loc_x1 - loc_x2)^2 + (loc_y1 - loc_y2)^2)
+    }
+    temp <- data.frame(x = loc_x_parent,y = loc_y_parent)
+    loc <- rbind(loc,temp)
+
+    cell_state_labels <- c(cell_state_labels,state_parent)
+    temp <- data.frame(node = node,index = length(cell_state_labels))
+    internal_lookup <- rbind(internal_lookup,temp)
+
+    #print(children)
+    #print(leaf_counts)
+    # if (length(children) > 1){
+    #   if((cell_state_children[1] == cell_state_children[2])&(leaf_counts == 2)){
+    #     diffuse_loss <- diffuse_loss + log2(prob_t[children[1],children[2]])
+    #   }
+    # }
+
+    if (length(children) > 1){
+      if(cell_state_children[1] == cell_state_children[2]){
+        ad_loss <- ad_loss + log2(1-p_a)
+      } else {
+        ad_loss <- ad_loss + log2(p_a)
+      }
+    }
+
+    if (cell_state_labels[length(cell_state_labels)] == "0"){
+      N_violations <- N_violations 
+    }
+  }
+
+  mutation_transitions <- mutation_transitions[mutation_transitions$freq > 0,]
+  state_transitions <- state_transitions[state_transitions$freq > 0,]
+  max_step <- length(state_transitions$freq)
+
+  l_barcode <- sum(mutation_transitions$freq * log2(mutation_transitions$freq/sum(mutation_transitions$freq)))
+  if (max_step > 0){
+    transit_prob <- exp(-1:-max_step)/sum(exp(-1:-max_step))
+    l_expression <- sum(state_transitions$freq * transit_prob) - N_violations*50 + lambda1 *  ad_loss
+    #l_expression <- - N_violations*50 + lambda1 *  ad_loss + lambda2 * diffuse_loss
+  }else {
+    l_expression <- - N_violations*50 + lambda1 * ad_loss 
+  #browser()
+  #l_expression <- sum(state_transitions$freq * log2(state_transitions$freq/sum(state_transitions$freq))) - N_violations*50 + diffuse_loss
+    
+  }
+  return(list(likelihood = 0.1 * l_expression + l_barcode + lambda2 * spatial_loss,loc_data = loc,muts_internal = muts))
+}
+```
+
+```{r}
+safe_solve <- function(A) {
+  if (is.null(dim(A))) {
+    A <- matrix(A, 1, 1)
+  }
+  return(solve(A))
+}
+barcode_loglik <- function(tree, muts, mu = 0.1) {
+  N_sites <- ncol(muts)
+  N_nodes <- nrow(muts)
+  N_leaves <- length(tree$tip.label)
+  
+  edge_len <- if (!is.null(tree$edge.length)) tree$edge.length else rep(1, nrow(tree$edge))
+  
+  # Recursive likelihood function
+  compute_likelihood <- function(node, site) {
+    if (node <= N_leaves) {
+      # Leaf: observed state
+      obs <- muts[node, site]
+      if (obs == 0) return(c(1, 0))
+      else if (obs == 1) return(c(0, 1))
+      else return(c(1, 1))  # unresolved / missing
+    } else {
+      # Internal: combine children
+      children <- tree$edge[tree$edge[,1] == node, 2]
+      L <- c(1, 1)  # initialize
+      for (child in children) {
+        e_idx <- which(tree$edge[,1] == node & tree$edge[,2] == child)[1]
+        t <- edge_len[e_idx]
+        
+        # Transition probabilities
+        P <- matrix(c(
+          exp(-mu*t),        0,
+          1 - exp(-mu*t),    1
+        ), nrow = 2, byrow = TRUE)
+        
+        # Child likelihood
+        L_child <- compute_likelihood(child, site)
+        
+        # Message passing
+        L <- L * as.vector(P %*% L_child)
+      }
+      return(L)
+    }
+  }
+  
+  # Accumulate across sites
+  loglik <- 0
+  root <- max(tree$edge[,1])
+  for (site in 1:N_sites) {
+    L_root <- compute_likelihood(root, site)
+    # Prior root = always unmutated at t=0
+    prob_site <- L_root[1]
+    loglik <- loglik + log(prob_site + 1e-12)
+  }
+  
+  return(loglik / log(2))  # convert to log2 like others
+}
+
+LikelihoodCal_ST <- function(tree, muts, cell_state_labels, state_lineages, loc,
+                             lambda1 = 10, lambda2 = 0.1, alpha = 1.0) {
+  N_char <- ncol(muts)
+  nodes_internal <- sort(unique(tree$edge[,1]), decreasing = TRUE)
+
+  # extend mutation table for internal nodes
+  allele_unique <- unique(unlist(muts))
+  muts <- rbind(muts, matrix(0, length(nodes_internal), N_char))
+  internal_lookup <- data.frame(node = numeric(), index = numeric())
+
+  # storage for state transitions
+  state_transitions <- data.frame(from = character(),
+                                  to = character(),
+                                  dist = numeric(),
+                                  stringsAsFactors = FALSE)
+
+  # storage for losses
+  ad_loss <- 0
+  spatial_loss <- 0
+  l_barcode <- 0
+  l_expression <- 0
+
+  # parameters
+  p_a <- 0.8   # asymmetric division prob
+  m_r <- 0.8   # migration rate
+
+  for (node in nodes_internal) {
+    children_index <- tree$edge[tree$edge[,1] == node, 2]
+    children <- integer()
+    for (cid in children_index) {
+      if (cid > length(tree$tip.label)) {
+        c_row <- internal_lookup$index[internal_lookup$node == cid]
+      } else {
+        c_row <- cid
+      }
+      children <- c(children, c_row)
+    }
+
+    ## --- MESSAGE PASSING: mutations ---
+    barcodes_children <- muts[children, ]
+    for (i in seq_len(N_char)) {
+      chars <- unique(barcodes_children[, i])
+      if (length(chars) == 1) {
+        muts[node, i] <- chars
+      } else {
+        muts[node, i] <- "0"  # unresolved
+      }
+    }
+    l_barcode <- barcode_loglik(tree, muts, mu = 0.1)
+
+    ## --- MESSAGE PASSING: states ---
+    cell_state_children <- cell_state_labels[children]
+    state_parent <- "0"
+
+    for (lineage in state_lineages) {
+      idx1 <- match(cell_state_children[1], lineage)
+      idx2 <- match(cell_state_children[2], lineage)
+      if (is.na(idx1) || is.na(idx2)) next
+      state_parent <- lineage[min(idx1, idx2)]
+      state_dist <- abs(idx1 - idx2)
+
+      # record transition events
+      state_transitions <- rbind(state_transitions,
+                                 data.frame(from = state_parent,
+                                            to = cell_state_children[1],
+                                            dist = abs(match(state_parent, lineage) - idx1)))
+      state_transitions <- rbind(state_transitions,
+                                 data.frame(from = state_parent,
+                                            to = cell_state_children[2],
+                                            dist = abs(match(state_parent, lineage) - idx2)))
+      break
+    }
+
+    # update labels + lookup
+    cell_state_labels <- c(cell_state_labels, state_parent)
+    internal_lookup <- rbind(internal_lookup,
+                             data.frame(node = node, index = length(cell_state_labels)))
+
+    # asymmetric division penalty
+    if (length(children) > 1) {
+      if (cell_state_children[1] == cell_state_children[2]) {
+        ad_loss <- ad_loss + log2(1 - p_a)
+      } else {
+        ad_loss <- ad_loss + log2(p_a)
+      }
+    }
+  }
+  
+   ## --- MESSAGE PASSING: locations ---
+    # --- Parameters for Brownian spatial model ---
+    sigma2 <- 1.0   # diffusion variance per unit branch length
+    eps2   <- 1e-3  # observation noise variance at leaves
+    mu0    <- c(mean(loc$x[seq_along(tree$tip.label)]),
+                mean(loc$y[seq_along(tree$tip.label)])) # weak prior mean
+    Sigma0 <- diag(1e3, 2)  # weak prior covariance
+    
+    # Pre-allocate per-node Gaussian messages (mean, cov)
+    n_nodes <- nrow(muts)  # leaves + internals after your rbind
+    m_mean  <- vector("list", n_nodes)  # each is length-2
+    m_cov   <- vector("list", n_nodes)  # each is 2x2
+    
+    # Initialize leaf messages
+    N_leaf <- length(tree$tip.label)
+    for (i in seq_len(N_leaf)) {
+      m_mean[[i]] <- c(loc$x[i], loc$y[i])
+      m_cov[[i]]  <- diag(eps2, 2)
+    }
+    
+    # Helper: log N(x; m, S)
+    log_dmvnorm_iso <- function(x, m, S) {
+      # S is 2x2; use Cholesky for stability
+      L <- chol(S)
+      z <- backsolve(L, forwardsolve(t(L), x - m, upper.tri = TRUE, transpose = TRUE))
+      quad <- sum(z * z)
+      logdet <- 2 * sum(log(diag(L)))
+      return(-0.5 * (2 * log(2*pi) + logdet + quad))
+    }
+    
+    # Upward Brownian message passing and log-likelihood accumulation
+    spatial_loglik <- 0.0
+    
+    nodes_internal <- sort(unique(tree$edge[,1]), decreasing = TRUE)
+    edge_len <- if (!is.null(tree$edge.length)) tree$edge.length else rep(1, nrow(tree$edge))
+    
+    for (node in nodes_internal) {
+      child_rows <- tree$edge[tree$edge[,1] == node, , drop = FALSE]
+      children <- child_rows[, 2]
+      # Combine child Gaussians into parent via precision summation
+      Lambda_v <- matrix(0, 2, 2)
+      eta_v    <- c(0, 0)
+      for (j in seq_along(children)) {
+        cnode <- children[j]
+        # t_vc from edge list
+        e_idx <- which(tree$edge[,1] == node & tree$edge[,2] == cnode)[1]
+        t_vc  <- edge_len[e_idx]
+        S_c_to_v <- m_cov[[cnode]] + diag(sigma2 * t_vc, 2)
+        # contribution to parent info
+        #print(S_c_to_v)
+        S_inv <- safe_solve(S_c_to_v)
+        Lambda_v <- Lambda_v + S_inv
+        eta_v    <- eta_v + S_inv %*% m_mean[[cnode]]
+      }
+      S_v <- solve(Lambda_v)
+      m_v <- as.vector(S_v %*% eta_v)
+      m_mean[[node]] <- m_v
+      m_cov [[node]] <- S_v
+      
+      temp <- data.frame(x = m_v[1],y = m_v[2])
+      loc <- rbind(loc,temp)
+    
+      # Add child likelihood contributions at the parent mean
+      for (j in seq_along(children)) {
+        cnode <- children[j]
+        e_idx <- which(tree$edge[,1] == node & tree$edge[,2] == cnode)[1]
+        t_vc  <- edge_len[e_idx]
+        S_c_to_v <- m_cov[[cnode]] + diag(sigma2 * t_vc, 2)
+        spatial_loglik <- spatial_loglik + log_dmvnorm_iso(m_mean[[cnode]], m_v, S_c_to_v)
+      }
+    }
+    
+    # Root prior integration
+    root <- max(nodes_internal)
+    S_root_int <- m_cov[[root]] + Sigma0
+    spatial_loglik <- spatial_loglik + log_dmvnorm_iso(m_mean[[root]], mu0, S_root_int)
+    
+    # If you want base-2 logs to match the rest:
+    spatial_loss <- spatial_loglik / log(2)
+
+  ## --- Compute proper state transition likelihood ---
+  if (nrow(state_transitions) > 0) {
+    for (lineage in state_lineages) {
+      for (i in seq_len(nrow(state_transitions))) {
+        if (!(state_transitions$from[i] %in% lineage &&
+              state_transitions$to[i] %in% lineage)) next
+        # distances from "from" to all possible states
+        idx_from <- match(state_transitions$from[i], lineage)
+        all_dists <- abs(seq_along(lineage) - idx_from)
+        probs <- exp(-alpha * all_dists)
+        probs <- probs / sum(probs)
+
+        idx_to <- match(state_transitions$to[i], lineage)
+        l_expression <- l_expression + log(probs[idx_to] + 1e-12)
+      }
+    }
+  }
+
+  ## --- Final likelihood ---
+  likelihood <- l_barcode + lambda1 * l_expression + lambda2 * spatial_loss
+
+  return(list(likelihood = likelihood,
+              loc_data = loc,
+              muts_internal = muts,
+              transitions = state_transitions))
+}
+
+```
+
+```{r}
+LikelihoodCal_ST <- function(tree, muts, cell_state_labels, state_lineages, loc,
+                             lambda1 = 10, lambda2 = 0.1, alpha = 1.0,
+                             estimate_ou_params = TRUE,                 # fit OU params if TRUE
+                             init_alpha = 1.0, init_sigma2 = 1.0) {    # initial guesses
+  # Dependencies
+  if (!requireNamespace("mvtnorm", quietly = TRUE)) {
+    stop("Please install the 'mvtnorm' package.")
+  }
+
+  N_char <- ncol(muts)
+  nodes_internal <- sort(unique(tree$edge[,1]), decreasing = TRUE)
+
+  # extend mutation table for internal nodes
+  allele_unique <- unique(unlist(muts))
+  muts <- rbind(muts, matrix(0, length(nodes_internal), N_char))
+  internal_lookup <- data.frame(node = numeric(), index = numeric())
+
+  # storage for state transitions
+  state_transitions <- data.frame(from = character(),
+                                  to = character(),
+                                  dist = numeric(),
+                                  stringsAsFactors = FALSE)
+
+  # storage for losses
+  ad_loss <- 0
+  spatial_loss <- 0
+  l_barcode <- 0
+  l_expression <- 0
+
+  # parameters for ad/asymmetric division heuristic (kept)
+  p_a <- 0.8   # asymmetric division prob
+  m_r <- 0.8   # migration rate (not used in OU)
+
+  # -------------------------
+  # 1) original upward pass: mutations & state aggregation (unchanged)
+  # -------------------------
+  for (node in nodes_internal) {
+    children_index <- tree$edge[tree$edge[,1] == node, 2]
+    children <- integer()
+    for (cid in children_index) {
+      if (cid > length(tree$tip.label)) {
+        c_row <- internal_lookup$index[internal_lookup$node == cid]
+      } else {
+        c_row <- cid
+      }
+      children <- c(children, c_row)
+    }
+
+    ## --- MESSAGE PASSING: mutations ---
+    barcodes_children <- muts[children, , drop = FALSE]
+    for (i in seq_len(N_char)) {
+      chars <- unique(barcodes_children[, i])
+      if (length(chars) == 1) {
+        muts[node, i] <- chars
+      } else {
+        muts[node, i] <- "0"  # unresolved
+      }
+    }
+
+    ## --- MESSAGE PASSING: states ---
+    cell_state_children <- cell_state_labels[children]
+    state_parent <- "0"
+
+    for (lineage in state_lineages) {
+      idx1 <- match(cell_state_children[1], lineage)
+      idx2 <- match(cell_state_children[2], lineage)
+      if (is.na(idx1) || is.na(idx2)) next
+      state_parent <- lineage[min(idx1, idx2)]
+      state_dist <- abs(idx1 - idx2)
+
+      # record transition events (two child transitions)
+      state_transitions <- rbind(state_transitions,
+                                 data.frame(from = state_parent,
+                                            to = cell_state_children[1],
+                                            dist = abs(match(state_parent, lineage) - idx1),
+                                            stringsAsFactors = FALSE))
+      state_transitions <- rbind(state_transitions,
+                                 data.frame(from = state_parent,
+                                            to = cell_state_children[2],
+                                            dist = abs(match(state_parent, lineage) - idx2),
+                                            stringsAsFactors = FALSE))
+      break
+    }
+
+    # update labels + lookup
+    cell_state_labels <- c(cell_state_labels, state_parent)
+    internal_lookup <- rbind(internal_lookup,
+                             data.frame(node = node, index = length(cell_state_labels)))
+
+    # asymmetric division penalty
+    if (length(children) > 1) {
+      if (cell_state_children[1] == cell_state_children[2]) {
+        ad_loss <- ad_loss + log2(1 - p_a)
+      } else {
+        ad_loss <- ad_loss + log2(p_a)
+      }
+    }
+  }
+
+  # -------------------------
+  # 2) Spatial: replace Brownian by state-dependent scalar OU + estimation
+  # -------------------------
+  # Helpers for scalar-OU (parent-state controlled) transitions:
+  OU_edge_scalar <- function(t, alpha, sigma2, mu_vec) {
+    # returns list(A (scalar), b (q-vector), Se (scalar))
+    if (t <= 0) {
+      A  <- 1.0
+      b  <- rep(0, length(mu_vec))
+      Se <- 0.0
+    } else {
+      A  <- exp(-alpha * t)
+      b  <- (1 - A) * mu_vec
+      # avoid divide-by-zero if alpha very small
+      Se <- if (alpha > 1e-12) (sigma2 / (2 * alpha)) * (1 - exp(-2 * alpha * t)) else sigma2 * t
+    }
+    list(A = A, b = b, Se = Se)
+  }
+
+  # combine children contributions for scalar-A OU (information form)
+  combine_children_scalarOU <- function(children_msgs, edge_pars, q, ridge = 1e-9) {
+    Lambda <- matrix(0, q, q)
+    eta    <- rep(0, q)
+    cache  <- vector("list", length(children_msgs))
+    for (j in seq_along(children_msgs)) {
+      m_c <- children_msgs[[j]]$mean
+      S_c <- children_msgs[[j]]$cov
+      par <- edge_pars[[j]]
+      A   <- par$A
+      b   <- par$b
+      Se  <- par$Se
+      S_ctov <- S_c + diag(Se, q)
+      # stable inverse
+      cholS <- tryCatch(chol(S_ctov + diag(ridge, q)), error = function(e) NULL)
+      if (is.null(cholS)) {
+        S_inv <- solve(S_ctov + diag(1e-8, q))
+      } else {
+        S_inv <- chol2inv(cholS)
+      }
+      # Lambda contribution (A scalar)
+      Lambda_c <- (A^2) * S_inv
+      eta_c    <- A * (S_inv %*% (m_c - b))
+      Lambda   <- Lambda + Lambda_c
+      eta      <- eta + as.vector(eta_c)
+      cache[[j]] <- list(m_c = m_c, S_ctov = S_ctov, A = A, b = b)
+    }
+    # posterior at parent
+    cholL <- tryCatch(chol(Lambda + diag(ridge, q)), error = function(e) NULL)
+    if (is.null(cholL)) {
+      S_par <- solve(Lambda + diag(1e-8, q))
+    } else {
+      S_par <- chol2inv(cholL)
+    }
+    m_par <- as.numeric(S_par %*% eta)
+    list(mean = m_par, cov = S_par, cache = cache)
+  }
+
+  # OU upward pass that returns loglik, loc, cov; it uses current cell_state_labels (including internals)
+  OU_message_passing_state_scalar <- function(tree, Y, all_states,
+                                              alpha_by_state, sigma2_by_state, mu_by_state,
+                                              mu0 = NULL, Sigma0 = NULL, obs_cov = NULL) {
+    n_tips  <- length(tree$tip.label)
+    n_nodes <- n_tips + tree$Nnode
+    q <- ncol(Y)
+    if (is.null(mu0)) mu0 <- colMeans(Y)
+    if (is.null(Sigma0)) Sigma0 <- diag(1e6, q)
+    if (is.null(obs_cov)) obs_cov <- diag(1e-6, q)
+
+    # storage
+    m_mean <- vector("list", n_nodes)
+    m_cov  <- vector("list", n_nodes)
+
+    # initialize leaves
+    for (i in seq_len(n_tips)) {
+      m_mean[[i]] <- as.numeric(Y[i, ])
+      m_cov [[i]] <- obs_cov
+    }
+
+    E <- tree$edge
+    L <- if (is.null(tree$edge.length)) rep(1, nrow(E)) else tree$edge.length
+    # children list
+    ch_list <- vector("list", n_nodes)
+    for (e in seq_len(nrow(E))) {
+      parent <- E[e,1]; child <- E[e,2]
+      ch_list[[parent]] <- c(ch_list[[parent]], child)
+    }
+    # internal nodes in postorder (decreasing parent indices works for ape trees)
+    nodes_internal <- sort(unique(E[,1]), decreasing = TRUE)
+    loglik <- 0.0
+
+    for (u in nodes_internal) {
+      ch <- ch_list[[u]]
+      if (length(ch) == 0) next
+
+      s_u <- as.character(all_states[u])
+      alpha <- alpha_by_state[[s_u]]
+      sigma2 <- sigma2_by_state[[s_u]]
+      mu_s <- as.numeric(mu_by_state[[s_u]])
+
+      # child messages and edge params
+      child_msgs <- vector("list", length(ch))
+      edge_pars  <- vector("list", length(ch))
+      for (j in seq_along(ch)) {
+        v <- ch[j]
+        idx <- which(E[,1]==u & E[,2]==v)[1]
+        t  <- if (length(idx)) L[idx] else 1.0
+        par <- OU_edge_scalar(t, alpha, sigma2, mu_s)
+        edge_pars[[j]]  <- par
+        child_msgs[[j]] <- list(mean = m_mean[[v]], cov = m_cov[[v]])
+      }
+
+      comb <- combine_children_scalarOU(child_msgs, edge_pars, q)
+      m_mean[[u]] <- comb$mean
+      m_cov [[u]] <- comb$cov
+
+      # accumulate per-child log-likelihood evaluated at parent mean
+      for (entry in comb$cache) {
+        mean_pred <- as.numeric(entry$A * m_mean[[u]] + entry$b)
+        # use mvtnorm::dmvnorm for logdensity
+        logdens <- mvtnorm::dmvnorm(entry$m_c, mean = mean_pred, sigma = entry$S_ctov, log = TRUE)
+        loglik <- loglik + logdens
+      }
+    }
+
+    # find root (node with no parent)
+    parents <- unique(E[,1]); children_all <- unique(E[,2])
+    root_candidates <- setdiff(parents, children_all)
+    root <- if (length(root_candidates)) root_candidates[1] else max(nodes_internal)
+
+    S_root_int <- m_cov[[root]] + Sigma0
+    loglik <- loglik + mvtnorm::dmvnorm(m_mean[[root]], mean = mu0, sigma = S_root_int, log = TRUE)
+
+    loc_mat <- matrix(NA_real_, nrow = n_nodes, ncol = q)
+    for (i in seq_len(n_nodes)) loc_mat[i, ] <- as.numeric(m_mean[[i]])
+
+    list(loglik = as.numeric(loglik), loc = loc_mat, cov = m_cov, states = all_states)
+  }
+
+  # Prepare Y (leaf coordinates) from input loc (assumes loc has x,y for tips in order)
+  N_leaf <- length(tree$tip.label)
+  if (!all(c("x","y") %in% colnames(loc))) {
+    stop("loc must be a data.frame with columns 'x' and 'y' for the leaves.")
+  }
+  Y <- matrix(NA_real_, nrow = N_leaf, ncol = 2)
+  for (i in seq_len(N_leaf)) {
+    Y[i,1] <- loc$x[i]; Y[i,2] <- loc$y[i]
+  }
+
+  # Build list of states for all nodes: current cell_state_labels has leaves + internals appended earlier.
+  # Ensure it's length equals number of rows in muts (nodes)
+  n_nodes_total <- nrow(muts)
+  if (length(cell_state_labels) != n_nodes_total) {
+    stop("cell_state_labels length must equal number of rows in muts after extension.")
+  }
+  states_all <- factor(cell_state_labels)
+  state_levels <- levels(states_all)
+
+  # Initial per-state parameters or fit them by MLE
+  # Parameter containers (named lists)
+  alpha_by_state <- list(); sigma2_by_state <- list(); mu_by_state <- list()
+  for (s in state_levels) {
+    alpha_by_state[[s]] <- init_alpha
+    sigma2_by_state[[s]] <- init_sigma2
+    # initialize mu as mean of leaf coords in that state (fallback to global mean)
+    idx <- which(as.character(states_all[seq_len(N_leaf)]) == s)
+    if (length(idx) > 0) {
+      mu_by_state[[s]] <- colMeans(Y[idx, , drop = FALSE])
+    } else {
+      mu_by_state[[s]] <- colMeans(Y)
+    }
+  }
+
+  if (estimate_ou_params) {
+    # pack/unpack helpers
+    pack_params <- function(alpha_by_state, sigma2_by_state, mu_by_state, state_levels) {
+      v <- numeric()
+      for (s in state_levels) {
+        v <- c(v, log(alpha_by_state[[s]]), log(sigma2_by_state[[s]]), as.numeric(mu_by_state[[s]]))
+      }
+      names(v) <- NULL
+      v
+    }
+    unpack_params <- function(theta, state_levels, q) {
+      res_alpha <- list(); res_sigma2 <- list(); res_mu <- list()
+      off <- 1
+      for (s in state_levels) {
+        log_alpha <- theta[off]; log_sigma2 <- theta[off+1]
+        mu_s <- theta[(off+2):(off+1+q)]
+        res_alpha[[s]] <- exp(log_alpha)
+        res_sigma2[[s]] <- exp(log_sigma2)
+        res_mu[[s]] <- as.numeric(mu_s)
+        off <- off + 2 + q
+      }
+      list(alpha = res_alpha, sigma2 = res_sigma2, mu = res_mu)
+    }
+
+    # objective: negative spatial log-likelihood (OU message passing)
+    neg_spatial_nll <- function(theta) {
+      pars <- unpack_params(theta, state_levels, q = 2)
+      res <- OU_message_passing_state_scalar(tree, Y, states_all,
+                                             pars$alpha, pars$sigma2, pars$mu,
+                                             mu0 = NULL, Sigma0 = NULL, obs_cov = diag(1e-6,2))
+      # return negative loglik
+      return(-res$loglik)
+    }
+
+    theta0 <- pack_params(alpha_by_state, sigma2_by_state, mu_by_state, state_levels)
+    # use L-BFGS-B with box constraints for numerical stability
+    opt <- optim(theta0, neg_spatial_nll, method = "L-BFGS-B", control = list(maxit = 200))
+    fitted <- unpack_params(opt$par, state_levels, q = 2)
+    alpha_by_state <- fitted$alpha
+    sigma2_by_state <- fitted$sigma2
+    mu_by_state <- fitted$mu
+    # optional: you can inspect opt$convergence / opt$value
+  }
+
+  # Run OU message passing with (fitted) params
+  ou_res <- OU_message_passing_state_scalar(tree, Y, states_all,
+                                            alpha_by_state, sigma2_by_state, mu_by_state,
+                                            mu0 = colMeans(Y), Sigma0 = diag(1e3,2),
+                                            obs_cov = diag(1e-6,2))
+  spatial_loglik <- ou_res$loglik
+  # base-2 loss like your earlier code
+  spatial_loss <- -spatial_loglik / log(2)
+
+  # reconstruct loc_data as a data.frame: rows are tips (1..N_leaf) then internals in increasing node index order
+  loc_mat <- ou_res$loc  # rows 1..n_nodes (tips then internals by ape convention)
+  loc_df <- data.frame(x = loc_mat[,1], y = loc_mat[,2])
+
+  # -------------------------
+  # 3) state transition (HMM-style) expression likelihood (unchanged)
+  # -------------------------
+  if (nrow(state_transitions) > 0) {
+    for (lineage in state_lineages) {
+      for (i in seq_len(nrow(state_transitions))) {
+        if (!(state_transitions$from[i] %in% lineage &&
+              state_transitions$to[i] %in% lineage)) next
+        idx_from <- match(state_transitions$from[i], lineage)
+        all_dists <- abs(seq_along(lineage) - idx_from)
+        probs <- exp(-alpha * all_dists)
+        probs <- probs / sum(probs)
+        idx_to <- match(state_transitions$to[i], lineage)
+        l_expression <- l_expression + log(probs[idx_to] + 1e-12)
+      }
+    }
+  }
+
+  # -------------------------
+  # 4) barcode term (kept as previous placeholder l_barcode)
+  #    If you have a barcode likelihood computation, plug it in here by filling l_barcode.
+  # -------------------------
+  # l_barcode remains as computed earlier (still zero unless you add code)
+
+  # Final additive likelihood (loss)
+  likelihood <- l_barcode + l_expression + lambda1 * ad_loss + lambda2 * spatial_loss
+
+  return(list(likelihood = likelihood,
+              loc_data = loc_df,
+              muts_internal = muts,
+              transitions = state_transitions,
+              # also return OU parameters for inspection
+              ou_params = list(alpha = alpha_by_state,
+                               sigma2 = sigma2_by_state,
+                               mu = mu_by_state),
+              ou_loglik = spatial_loglik,
+              ou_res = ou_res))
+}
+
+```
+
+
+
+```{r}
+library("TreeTools")
+TreeLC2 <- function(tree,muts,loc,prob_internal = NULL){
+
+  tree <- Preorder(tree)
+  n_nodes <- tree$Nnode
+  n_tips <- length(tree$tip.label)
+  total_nodes <- n_nodes + n_tips
+  tree$node.label <-paste0("node", seq(1:tree$Nnode))
+  descendants <- Descendants(tree)
+
+  if (is.null(prob_internal)){
+    prob_internal <- c()
+    for (i in 1:n_nodes){
+      node <- n_tips + i
+      #barcode_children <- muts[tree$edge[tree$edge[,1] == node,2],]
+      #barcode_node <- muts[node,]
+      #char_diff <- rowSums(barcode_children != barcode_node[col(barcode_children)])
+  
+      # spatial dispersion for descendants
+      desc <- descendants[[node]]
+      desc <- desc[desc <= n_tips]
+      spatial_disp <- if (length(desc) > 1) mean(dist(loc[desc,])) else 0
+  
+      # combine (example: dispersion + mismatch)
+      prob_internal <- c(prob_internal,spatial_disp)
+    }
+
+    prob_internal <- prob_internal / sum(prob_internal)
+      
+    prob_internal <- c(dunif(1:n_tips,1/n_tips,n_tips),prob_internal)
+    #prob_internal <- dunif(1:(n_nodes + n_tips),1,n_nodes + n_tips)
+  }
+
+  subtree_swap <- sample(tree$Nnode + length(tree$tip.label),2,prob = prob_internal)
+  subtree1 <- Subtree(tree,subtree_swap[1])
+  subtree2 <- Subtree(tree,subtree_swap[2])
+
+  repeat {
+    subtree_swap <- sample(total_nodes, 2, prob = prob_internal)
+    subtree1 <- Subtree(tree, subtree_swap[1])
+    subtree2 <- Subtree(tree, subtree_swap[2])
+    if (length(intersect(subtree1$tip.label, subtree2$tip.label)) == 0) break
+  }
+
+  subtree1$name <- subtree_swap[1]
+  subtree1$edge.length <- rep(1, nrow(subtree1$edge))
+  subtree2$name <- subtree_swap[2]
+  subtree2$edge.length <- rep(1, nrow(subtree2$edge))
+
+  root1 <- tree$edge[tree$edge[,2]==subtree1$name,1]
+  root2 <- tree$edge[tree$edge[,2]==subtree2$name,1]
+
+  if (root1 > root2) {
+    reg <- subtree2
+    subtree2 <- subtree1
+    subtree1 <- reg
+  }
+  root1 <- tree$edge[tree$edge[,2]==subtree1$name,1]
+  root2 <- tree$edge[tree$edge[,2]==subtree2$name,1]
+  root1 <- paste0("node",root1-Ntip(tree))
+  root2 <- paste0("node",root2-Ntip(tree))
+  subtree1$root.edge <- 1
+  subtree2$root.edge <- 1
+  Ntip1 <- subtree1$Ntip
+  Ntip2 <- subtree2$Ntip
+
+  if (length(subtree1$tip.label)>1){
+    tree_prune1 <- drop.tip(tree, subtree1$tip.label, trim.internal = FALSE, subtree = FALSE,root.edge = 1)
+  } else{
+    tree_prune1 <- tree
+    tree_prune1$tip.label[tree_prune1$tip.label == subtree1$tip.label] <- "NA"
+  }
+  if (length(subtree2$tip.label)>1){
+    tree_prune2 <- drop.tip(tree_prune1, subtree2$tip.label, trim.internal = FALSE, subtree = FALSE,root.edge = 1)
+  } else{
+    tree_prune2 <- tree_prune1
+    tree_prune2$tip.label[tree_prune2$tip.label == subtree2$tip.label] <- "NA"
+  }
+  #tree_new1 <- bind.tree(tree_prune1, subtree1, where = subtree2$node.label[1]-Nnode1)
+  #tree_prune2 <- drop.tip(tree_prune1, subtree2$tip.label, trim.internal = FALSE, subtree = FALSE,root.edge = 1)
+  #print(regraft_loc)
+  #N_na <- sum(tree_prune2$tip.label == 'NA')
+  tree_new1 <- bind.tree(tree_prune2, subtree2, where = Ntip(tree_prune2)+match(root1,tree_prune2$node.label))
+  tree_new2 <- bind.tree(tree_new1, subtree1, where = Ntip(tree_new1)+match(root2,tree_new1$node.label))
+  tree_final <- drop.tip(tree_new2, tree_new2$tip.label[grepl("node", tree_new2$tip.label, fixed = TRUE)], trim.internal = TRUE)
+  tree_final <- drop.tip(tree_final, "NA")
+  tree_final$node.label <- NULL
+  tree_final$edge.length <- rep(1, length(tree_final$edge.length))
+  #plot(tree_final)
+  return(tree_final)
+}
+
+TreeLC2_optimized <- function(tree, prob_internal = NULL, muts) {
+  
+  tree <- Preorder(tree)
+  n_nodes <- tree$Nnode
+  n_tips <- length(tree$tip.label)
+  total_nodes <- n_nodes + n_tips
+  tree$node.label <- paste0("node", seq_len(n_nodes))
+
+  if (is.null(prob_internal)) {
+    prob_internal <- dunif(1:total_nodes, 1, total_nodes)
+  }
+
+  # Select two unique, non-overlapping subtrees
+  repeat {
+    subtree_swap <- sample(total_nodes, 2, prob = prob_internal)
+    subtree1 <- Subtree(tree, subtree_swap[1])
+    subtree2 <- Subtree(tree, subtree_swap[2])
+    if (length(intersect(subtree1$tip.label, subtree2$tip.label)) == 0) break
+  }
+
+  # Assign names and uniform edge lengths
+  subtree1$name <- subtree_swap[1]
+  subtree2$name <- subtree_swap[2]
+  subtree1$edge.length <- rep(1, nrow(subtree1$edge))
+  subtree2$edge.length <- rep(1, nrow(subtree2$edge))
+
+  # Find parent nodes
+  root1 <- tree$edge[tree$edge[, 2] == subtree1$name, 1]
+  root2 <- tree$edge[tree$edge[, 2] == subtree2$name, 1]
+
+  # Ensure subtree1 corresponds to the smaller root index
+  if (root1 > root2) {
+    temp <- subtree1
+    subtree1 <- subtree2
+    subtree2 <- temp
+    root1 <- tree$edge[tree$edge[, 2] == subtree1$name, 1]
+    root2 <- tree$edge[tree$edge[, 2] == subtree2$name, 1]
+  }
+
+  root1_label <- paste0("node", root1 - n_tips)
+  root2_label <- paste0("node", root2 - n_tips)
+  subtree1$root.edge <- 1
+  subtree2$root.edge <- 1
+
+  # Efficient tip pruning
+  tree_pruned <- drop.tip(tree, unique(c(subtree1$tip.label, subtree2$tip.label)), 
+                          trim.internal = FALSE, subtree = FALSE, root.edge = 1)
+
+  # Fix missing node match issue
+  where1 <- which(tree_pruned$node.label == root1_label)
+  where2 <- which(tree_pruned$node.label == root2_label)
+
+  if (length(where1) == 0 || length(where2) == 0) {
+    stop("Error: One or both root labels were not found in the pruned tree.")
+  }
+
+  # Reattach subtrees
+  tree_new1 <- bind.tree(tree_pruned, subtree2, where = Ntip(tree_pruned) + where1)
+  tree_new2 <- bind.tree(tree_new1, subtree1, where = Ntip(tree_new1) + where2)
+
+  # Final cleanup
+  tree_final <- drop.tip(tree_new2, tree_new2$tip.label[grepl("node", tree_new2$tip.label, fixed = TRUE)], trim.internal = TRUE)
+  tree_final <- drop.tip(tree_final, "NA")
+  tree_final$node.label <- NULL
+  tree_final$edge.length <- rep(1, length(tree_final$edge.length))
+
+  return(tree_final)
+}
+
+TreeLC2_fast <- function(tree, muts, prob_internal = NULL) {
+  if (!requireNamespace("ape", quietly = TRUE)) {
+    stop("Please install package 'ape'")
+  }
+  # ensure internal node labels exist so we can map nodes after pruning
+  if (is.null(tree$node.label) || length(tree$node.label) != tree$Nnode) {
+    tree$node.label <- paste0("node", seq_len(tree$Nnode))
+  }
+
+  n_tips <- ape::Ntip(tree)
+  n_nodes <- tree$Nnode
+  total_nodes <- n_tips + n_nodes
+
+  # compute sampling weights once if not provided
+  if (is.null(prob_internal)) {
+    # compute a simple per-node "informativeness" score for internal nodes
+    internal_scores <- numeric(n_nodes)
+    for (i in seq_len(n_nodes)) {
+      node_id <- n_tips + i
+      child_ids <- tree$edge[tree$edge[,1] == node_id, 2]
+      # if child ids include internal nodes, use their row indices from muts if present
+      # ensure we have rows in muts for internal nodes -> your muts construction should include internals
+      # If not present, fallback to using only tip children
+      child_rows <- child_ids[child_ids <= nrow(muts)]
+      if (length(child_rows) >= 1 && node_id <= nrow(muts)) {
+        barcode_children <- muts[child_rows, , drop = FALSE]
+        barcode_node     <- muts[node_id, , drop = FALSE]
+        # number of differing characters (sum across children)
+        diffs <- rowSums(barcode_children != matrix(rep(as.character(barcode_node), nrow(barcode_children)),
+                                                   nrow = nrow(barcode_children), byrow = TRUE))
+        internal_scores[i] <- sum(diffs)
+      } else {
+        internal_scores[i] <- 1
+      }
+    }
+    # make a vector for tips + internal: small weight for tips, informative for internals
+    tip_weights <- rep(1, n_tips)
+    prob_internal <- c(tip_weights, internal_scores + 1e-6)
+  }
+
+  # restrict proposals to internal nodes only (safer; but you can modify to include tips)
+  internal_node_ids <- (n_tips + 1):(n_tips + n_nodes)
+  # sample two distinct internal nodes (no replacement)
+  # use the prob_internal vector values for those internal nodes as weights
+  weights_internal <- prob_internal[internal_node_ids]
+  # if weights are all zero, fall back to uniform
+  if (all(weights_internal == 0)) weights_internal <- rep(1, length(weights_internal))
+  choice <- sample(internal_node_ids, size = 2, prob = weights_internal, replace = FALSE)
+  node1 <- choice[1]
+  node2 <- choice[2]
+
+  # Extract subtrees (clades). extract.clade expects a node number; works for internal nodes.
+  subtree1 <- tryCatch(ape::extract.clade(tree, node1), error = function(e) NULL)
+  subtree2 <- tryCatch(ape::extract.clade(tree, node2), error = function(e) NULL)
+  if (is.null(subtree1) || is.null(subtree2)) {
+    # fallback: return original tree (no change)
+    return(tree)
+  }
+
+  # ensure disjoint tip sets (if not, sample again a few times; limited attempts)
+  attempts <- 0
+  while (length(intersect(subtree1$tip.label, subtree2$tip.label)) > 0 && attempts < 10) {
+    choice <- sample(internal_node_ids, size = 2, prob = weights_internal, replace = FALSE)
+    node1 <- choice[1]; node2 <- choice[2]
+    subtree1 <- tryCatch(ape::extract.clade(tree, node1), error = function(e) NULL)
+    subtree2 <- tryCatch(ape::extract.clade(tree, node2), error = function(e) NULL)
+    attempts <- attempts + 1
+  }
+  if (is.null(subtree1) || is.null(subtree2) ||
+      length(intersect(subtree1$tip.label, subtree2$tip.label)) > 0) {
+    # give up and return original tree
+    return(tree)
+  }
+
+  # parent nodes in original tree (their node numbers)
+  parent1 <- tree$edge[tree$edge[,2] == node1, 1]
+  parent2 <- tree$edge[tree$edge[,2] == node2, 1]
+
+  # corresponding node labels (these labels persist into the pruned tree if node remains)
+  parent1_label <- if (parent1 > n_tips) tree$node.label[parent1 - n_tips] else tree$tip.label[parent1]
+  parent2_label <- if (parent2 > n_tips) tree$node.label[parent2 - n_tips] else tree$tip.label[parent2]
+
+  # prune both subtrees in one go (don't trim internal nodes so parent nodes remain)
+  all_tips_to_drop <- c(subtree1$tip.label, subtree2$tip.label)
+  tree_pruned <- ape::drop.tip(tree, all_tips_to_drop, trim.internal = FALSE)
+
+  # find where to attach subtree2: locate parent1_label in pruned tree node labels
+  # find index among internal nodes of tree_pruned
+  where1_idx <- NA_integer_
+  if (!is.null(tree_pruned$node.label)) {
+    where1_idx <- which(tree_pruned$node.label == parent1_label)
+  }
+  # fallback: try to find as a tip label (rare)
+  if (length(where1_idx) == 0) {
+    where1_idx <- which(tree_pruned$tip.label == parent1_label)
+    where1_is_tip <- TRUE
+  } else {
+    where1_is_tip <- FALSE
+  }
+
+  # If we could not map parent1_label (maybe parent was removed), pick a random internal node in pruned tree
+  if (length(where1_idx) == 0) {
+    # choose an internal node to attach (we will attach at its node number)
+    if (tree_pruned$Nnode > 0) {
+      where1_idx <- sample(seq_len(tree_pruned$Nnode), 1)
+      where1_is_tip <- FALSE
+    } else {
+      # only tips remain, attach to a random tip
+      where1_idx <- sample(seq_len(nrow(tree_pruned$tip.label)), 1)
+      where1_is_tip <- TRUE
+    }
+  }
+
+  # Build integer 'where' value for bind.tree: if attaching to internal node, add Ntip offset
+  if (where1_is_tip) {
+    where1 <- which(tree_pruned$tip.label == parent1_label)[1]
+  } else {
+    where1 <- ape::Ntip(tree_pruned) + where1_idx[1]
+  }
+
+  # Now bind subtree2 at where1
+  tree_new1 <- tryCatch({
+    ape::bind.tree(tree_pruned, subtree2, where = where1)
+  }, error = function(e) {
+    # fallback: attach subtree2 randomly to any edge/node
+    any_where <- sample(1:(ape::Ntip(tree_pruned) + tree_pruned$Nnode), 1)
+    ape::bind.tree(tree_pruned, subtree2, where = any_where)
+  })
+
+  # After binding subtree2, we want to attach subtree1 at the location corresponding to original parent2
+  # find parent2_label in tree_new1
+  where2_idx <- NA_integer_
+  if (!is.null(tree_new1$node.label)) {
+    where2_idx <- which(tree_new1$node.label == parent2_label)
+  }
+  if (length(where2_idx) == 0) {
+    # maybe parent2_label is a tip in the new tree
+    where2_idx <- which(tree_new1$tip.label == parent2_label)
+    where2_is_tip <- length(where2_idx) > 0
+  } else {
+    where2_is_tip <- FALSE
+  }
+  if (length(where2_idx) == 0) {
+    # fallback: random where
+    where2 <- sample(1:(ape::Ntip(tree_new1) + tree_new1$Nnode), 1)
+  } else if (where2_is_tip) {
+    where2 <- which(tree_new1$tip.label == parent2_label)[1]
+  } else {
+    where2 <- ape::Ntip(tree_new1) + where2_idx[1]
+  }
+
+  # bind subtree1 into tree_new1 at where2
+  tree_new2 <- tryCatch({
+    ape::bind.tree(tree_new1, subtree1, where = where2)
+  }, error = function(e) {
+    # fallback: random binding
+    any_where <- sample(1:(ape::Ntip(tree_new1) + tree_new1$Nnode), 1)
+    ape::bind.tree(tree_new1, subtree1, where = any_where)
+  })
+
+  # Clean up: remove internal node labels if desired
+  tree_final <- tree_new2
+  tree_final$node.label <- NULL
+  tree_final$edge.length <- rep(1, length(tree_final$edge.length))
+
+  # As a sanity check: if the final tree is invalid or has mismatched tip count, return original tree
+  if (ape::Ntip(tree_final) != ape::Ntip(tree)) {
+    return(tree)
+  }
+
+  return(tree_final)
+}
+
+TreeLC2_exhaustive <- function(tree, muts, loc) {
+  tree <- Preorder(tree)
+  n_nodes <- tree$Nnode
+  n_tips <- length(tree$tip.label)
+  total_nodes <- n_nodes + n_tips
+  tree$node.label <- paste0("node", seq(1:tree$Nnode))
+  descendants <- Descendants(tree)
+  
+  all_new_trees <- list()
+  
+  # loop over all unique pairs of nodes
+  pair_id <- 1
+  for (i in 1:(total_nodes - 1)) {
+    for (j in (i + 1):total_nodes) {
+      subtree1 <- Subtree(tree, i)
+      subtree2 <- Subtree(tree, j)
+      
+      # skip if overlapping descendants
+      if (length(intersect(subtree1$tip.label, subtree2$tip.label)) > 0) next
+      
+      # --- your existing swap/regraft code goes here ---
+      new_tree <- tryCatch({
+        tree_swap <- swap_subtrees(tree, subtree1, subtree2,i,j)  # helper function (see below)
+        tree_swap
+      }, error = function(e) NULL)
+      
+      if (!is.null(new_tree)) {
+        all_new_trees[[pair_id]] <- new_tree
+        pair_id <- pair_id + 1
+      }
+    }
+  }
+  
+  return(all_new_trees)
+}
+
+swap_subtrees <- function(tree, subtree1,subtree2,i,j) {
+  # your drop.tip + bind.tree + clean-up logic from TreeLC2
+  # (everything after the `repeat` block)
+  subtree1$name <- i
+  subtree2$name <- j
+  subtree1$edge.length <- rep(1, nrow(subtree1$edge))
+  subtree2$edge.length <- rep(1, nrow(subtree2$edge))
+
+  # Find parent nodes
+  root1 <- tree$edge[tree$edge[, 2] == subtree1$name, 1]
+  root2 <- tree$edge[tree$edge[, 2] == subtree2$name, 1]
+
+  # Ensure subtree1 corresponds to the smaller root index
+  if (root1 > root2) {
+    temp <- subtree1
+    subtree1 <- subtree2
+    subtree2 <- temp
+    root1 <- tree$edge[tree$edge[, 2] == subtree1$name, 1]
+    root2 <- tree$edge[tree$edge[, 2] == subtree2$name, 1]
+  }
+
+  root1_label <- paste0("node", root1 - n_tips)
+  root2_label <- paste0("node", root2 - n_tips)
+  subtree1$root.edge <- 1
+  subtree2$root.edge <- 1
+
+  # Efficient tip pruning
+  tree_pruned <- drop.tip(tree, unique(c(subtree1$tip.label, subtree2$tip.label)), 
+                          trim.internal = FALSE, subtree = FALSE, root.edge = 1)
+
+  # Fix missing node match issue
+  where1 <- which(tree_pruned$node.label == root1_label)
+  where2 <- which(tree_pruned$node.label == root2_label)
+
+  if (length(where1) == 0 || length(where2) == 0) {
+    stop("Error: One or both root labels were not found in the pruned tree.")
+  }
+
+  # Reattach subtrees
+  tree_new1 <- bind.tree(tree_pruned, subtree2, where = Ntip(tree_pruned) + where1)
+  tree_new2 <- bind.tree(tree_new1, subtree1, where = Ntip(tree_new1) + where2)
+
+  # Final cleanup
+  tree_final <- drop.tip(tree_new2, tree_new2$tip.label[grepl("node", tree_new2$tip.label, fixed = TRUE)], trim.internal = TRUE)
+  tree_final <- drop.tip(tree_final, "NA")
+  tree_final$node.label <- NULL
+  tree_final$edge.length <- rep(1, length(tree_final$edge.length))
+  # must return a valid phylo tree
+  return(tree_final)
+}
+```
+
+```{r}
+ncells <- 32
+phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+#phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+N_nodes <- 2*ncells-2
+ngenes <- 500
+max_walk <- 6
+p_a <- 1
+n_cif <- 30
+n_diff <- 20
+cif_step <- 0.25
+p_d <- 0
+N_char <- 9
+
+#Simulating gene expression data
+returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+
+cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,n_CIF = n_cif,n_diff = n_diff,step = cif_step,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+
+#We only need the leaf cells for experiments
+cif_leaves <- lapply(c(1:3),function(parami){
+  cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+  return(cif_leaves_all)
+})
+cif_res <- list(cif_leaves,cifs[[2]])
+states <- cifs[[2]]
+states <- states[1:N_nodes,]
+states_leaves <- states[1:ncells,]
+muts <- cifs[[7]]
+rownames(muts) <- paste("cell",states[,4],sep = "_")
+muts_leaves <- muts[1:ncells,]
+tree <- cifs[[4]]
+
+#simulate true counts
+true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+#umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+#umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+
+#counts <- t(true_counts_res[[1]])
+#rownames(counts) <- rownames(muts_leaves)
+
+
+cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+df_spatial_continuous <- returnlist[[1]]
+
+hmap_temSOMap <- ggplot(data = df_spatial_continuous, aes(x=x, y=y, color=as.factor(state))) +
+  geom_point() + ggtitle("Spatial Map by cell types") + xlab("") + ylab("") +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+hmap_temSOMap
+
+
+nclones <- 8
+df_spatial_continuous$clone <- df_spatial_continuous$cellid
+for (i in 1:nclones){
+  clone_depth <- ncells/nclones
+  df_spatial_continuous$clone[df_spatial_continuous$cellid > ((i-1)*clone_depth) & df_spatial_continuous$cellid <= i*clone_depth] <- i
+}
+
+hmap_temSOMap <- ggplot(data = df_spatial_continuous, aes(x=x, y=y, color=as.factor(clone))) +
+  geom_point() + ggtitle("Spatial Map by clones") + xlab("") + ylab("") +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_color_manual(breaks = c(1, 2, 3,4, 5, 6,7, 8),
+                        values=c("red", "yellow", "green", "blue", "orange","cyan", "purple", "pink")) + xlim(-6,6) + ylim(-6,6)
+
+hmap_temSOMap + geom_text(aes(x=x + 0.3, y=y,label = cellid))
+#ggsave("plots/spatial_16cells.png",width = 6,height = 4)
+```
+
+
+```{r}
+df_visual <- returnlist[[2]][[3]]
+states_internal <- c(1,1,2,2,3,3,4,4)
+hmap_temSOMap <- ggplot(data = df_visual, aes(x=x, y=y, color=as.factor(states_internal))) +
+  geom_point() + ggtitle("Spatial Map by clones") + xlab("") + ylab("") +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_color_manual(breaks = c(1, 2, 3,4, 5, 6,7, 8),
+                        values=c("red", "yellow", "green", "blue", "orange","cyan", "purple", "pink")) + xlim(-4,4) + ylim(-4,4)
+hmap_temSOMap + geom_text(aes(x=x + 0.3, y=y,label = cellid))
+#ggsave("plots/spatial_16cells.png",width = 6,height = 4)
+```
+
+```{r}
+
+df_combined <- rbind(returnlist[[1]] ,returnlist[[2]][[1]],returnlist[[2]][[2]],returnlist[[2]][[3]])
+df_combined$color <- as.character(c(1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,1,4,1,1,4,4,1,1,2,2,3,3,4,4))
+df_combined$z <- c(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,9,9,6,6,6,6,3,3,3,3,3,3,3,3)
+colors <- c("red", "yellow", "green", "blue","#febc48","#2ab6c2","#ff9333","#06bfce","#ff771f","#efed82","#82efa0","#82a1ef")
+colors <- setNames(colors, as.character(c(1,2,3,4,5,6,7,8,9,10,11,12)))
+
+#df_combined$color <- as.character(df_combined$color)  # Convert to character
+
+fig <- plot_ly(df_combined, x = ~x, y = ~y, z = ~z, 
+               color = ~color, colors = colors) %>%
+  add_markers()
+
+unique_z <- unique(df_combined$z)
+for (z_level in unique_z) {
+  fig <- fig %>% add_trace(
+    type = "mesh3d",
+    x = c(-4, 4, 4, -4),  # Plane corners (x)
+    y = c(-4, -4, 4, 4),  # Plane corners (y)
+    z = rep(z_level, 4),  # Constant Z level
+    color = I("gray"),   # Strictly gray color
+    opacity = 0.2,       # Transparency
+    showscale = FALSE
+  )
+}
+
+# Step 1: Find points that should be connected across slices
+df_combined <- df_combined %>%
+  arrange(color,z)  # Ensure points are grouped logically
+
+# Step 2: Add connecting lines
+for (gen in unique_z) {
+  if (gen != min(unique_z)){
+    print("adding a line")
+    parents <- df_combined[df_combined$z == gen,]
+    
+    for (i in 1:nrow(parents)){
+      parent <- parents[i,]
+      if (gen > 6){
+        children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$color == parent$color),]
+        for (j in 1:nrow(children_nodes)){
+          subset_df <- rbind(parent,children_nodes[j,])
+          fig <- fig %>% add_trace(
+            type = "scatter3d",
+            mode = "lines",
+            x = subset_df$x,
+            y = subset_df$y,
+            z = subset_df$z,
+            line = list(color = "black"),
+            showlegend = FALSE,
+            inherit = FALSE
+          )   
+        }
+      } else if (gen == 6){
+        children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$color == i),]
+        for (j in 1:nrow(children_nodes)){
+          subset_df <- rbind(parent,children_nodes[j,])
+          fig <- fig %>% add_trace(
+            type = "scatter3d",
+            mode = "lines",
+            x = subset_df$x,
+            y = subset_df$y,
+            z = subset_df$z,
+            line = list(color = "black"),
+            showlegend = FALSE,
+            inherit = FALSE
+          )   
+        }
+      } else if (gen == 3){
+          children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$cellid >= 2*i-1)&(df_combined$cellid <= 2*i),]
+          for (j in 1:nrow(children_nodes)){
+            subset_df <- rbind(parent,children_nodes[j,])
+            fig <- fig %>% add_trace(
+              type = "scatter3d",
+              mode = "lines",
+              x = subset_df$x,
+              y = subset_df$y,
+              z = subset_df$z,
+              line = list(color = "black"),
+              showlegend = FALSE,
+              inherit = FALSE
+            )   
+          }
+      }
+    }
+  }
+}
+z_labels <- setNames(c("Gen 5", "Gen 2", "Gen 3", "Gen 4"), unique_z)
+
+
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'x'),
+                                   yaxis = list(title = 'y'),
+                                  zaxis = list(
+    title = 'Lineage generation',
+    tickvals = unique_z,     # Use the unique Z values for placement
+    ticktext = z_labels      # Display these as labels instead of numbers
+  )))
+
+fig
+```
+
+```{r}
+# calculate likelihood
+lambda2 <- 0.1
+muts <- as.data.frame(muts_leaves)
+tree <- NJ_from_barcode(muts)
+#tree <- rtree(16)
+labels = rownames(muts)
+#tree <- rtree(length(labels), rooted = TRUE, tip.label = labels)
+tree$edge.length <- rep(1, length(tree$edge.length))
+tree_init <- tree
+state_lineages <- read.tree(text='((1:4, (2:2, 3:2):2):2);')
+edges <- tree$edge
+#maxcl <- LikelihoodCal(tree,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+loc_data <- df_spatial_continuous%>%select(x,y)
+#colnames(loc_data) <- c("x","y")
+states_fake <- c(1,1,1,1,2,2,2,2,3,3,3,3,1,5,5,5)
+returnlist <- LikelihoodCal_ST(tree, muts, df_spatial_continuous$state, phyla, loc_data,lambda1 = 0.001,lambda2 = 0.1,alpha = 1)
+#returnlist <- LikelihoodCal_ST(tree, muts, states_fake, phyla, loc_data,lambda2 = lambda2)
+max_likelihood <- returnlist$likelihood
+loc_init <- returnlist$loc_data
+muts_internal <- returnlist$muts_internal
+likelihood_curve <- c()
+seeds <- runif(10000, 1, 99999)
+best_tree <- tree
+best_tree_list <- list()
+maxl_list <- c()
+ptm <- proc.time()
+LikelihoodCal_time <- 0
+TreeLC_time <- 0
+maxIter <- 10000
+for (i in 1:maxIter) {
+  c_time <- proc.time()
+
+  tree <- TreeLC2(tree,muts_internal)
+  #tree_new <-  rNNI(tree,1,1)
+  TreeLC_time <- TreeLC_time + proc.time() - c_time
+  #cl <- LikelihoodCal(tree_new,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+  c_time <- proc.time()
+  returnlist <- LikelihoodCal_ST(tree, muts, df_spatial_continuous$state, phyla, loc_data,lambda1 = 0.01,lambda2 = 0.1,alpha = 1)
+  likelihood_new <- returnlist$likelihood
+  loc_infer <- returnlist$loc_data
+  muts_internal <- returnlist$muts_internal
+  #cl_list <- LikelihoodCal2(tree_new,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+  LikelihoodCal_time <- LikelihoodCal_time + proc.time() - c_time
+  likelihood_curve <- c(likelihood_curve, max_likelihood)
+  if (likelihood_new > max_likelihood) {
+    max_likelihood <- likelihood_new
+    tree <- tree_new
+    best_tree <- tree
+    best_loc <- loc_infer
+  }
+  if (i %% 100 == 0) {
+    likelihood_check <- sprintf("After %g iterations, the best likelihood is %g.",
+                                i, max_likelihood)
+    print(likelihood_check)
+  }
+  if (i > 100) {
+    if (length(unique(likelihood_curve[(i - 20):i])) == 1) {
+      #record the local optima, and
+      best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+      maxl_list <- c(maxl_list, max_likelihood)
+
+      tree <- tree_init
+      #tree <- rtree(length(labels), rooted = TRUE, tip.label = labels)
+      tree$edge.length <- rep(1, length(tree$edge.length))
+      #maxcl <- LikelihoodCal(tree,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+      returnlist <- LikelihoodCal_ST(tree, muts, df_spatial_continuous$state, phyla, loc_data,lambda1 = 0.01,lambda2 = 0.1,alpha = 1)
+      max_likelihood <- returnlist$likelihood
+      loc_infer <- returnlist$loc_data
+      muts_internal <- returnlist$muts_internal
+    }
+  }
+}
+total_time <- proc.time() - ptm
+total_time
+
+color_vis <- as.factor(c(df_benchmark$state[1:16],0,df_benchmark$state[17:30]))
+loc_infer$cellid <-  as.factor(c(df_benchmark$cellid[1:16],0,df_benchmark$cellid[17:30]))
+loc_infer$state <- color_vis
+hmap_temSOMap <- ggplot(data = loc_infer, aes(x=x, y=y, color=state)) +
+  geom_point() + ggtitle("Spatial Map by states") + xlab("") + ylab("") +
+  theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_color_manual(breaks = c(1, 2, 3,4, 5, 6,7, 8),
+                        values=c("red", "yellow", "green", "blue", "orange","cyan", "purple", "pink"))
+hmap_temSOMap + geom_text(aes(x=x + 0.3, y=y,label = cellid))
+```
+
+
+```{r}
+df_stats <- c()
+for (best_tree in best_tree_list){
+  df_benchmark <- df_combined %>% arrange(cellid)
+  gt_x <- c(df_benchmark$x[1:16],0,df_benchmark$x[17:30])
+  gt_y <- c(df_benchmark$y[1:16],0,df_benchmark$y[17:30])
+  mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+  mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+  plot(best_tree)
+  
+  color_vis <- as.factor(c(df_benchmark$state[1:16],0,df_benchmark$state[17:30]))
+  loc_infer$cellid <-  as.factor(c(df_benchmark$cellid[1:16],0,df_benchmark$cellid[17:30]))
+  loc_infer$state <- color_vis
+  hmap_temSOMap <- ggplot(data = loc_infer, aes(x=x, y=y, color=state)) +
+    geom_point() + ggtitle("Spatial Map by states") + xlab("") + ylab("") +
+    theme(plot.title = element_text(hjust = 0.5),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_color_manual(breaks = c(1, 2, 3,4, 5, 6,7, 8),
+                          values=c("red", "yellow", "green", "blue", "orange","cyan", "purple", "pink"))
+  hmap_temSOMap + geom_text(aes(x=x + 0.3, y=y,label = cellid))
+  
+  
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(1:16)
+  #tree_gt$tip.label <- paste0("cell_",as.character(1:16))
+  rf_init <- RF.dist(tree_gt,tree_init, normalize = TRUE)
+  rf_best <- RF.dist(tree_gt,best_tree, normalize = TRUE)
+  nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+  nye_best <- NyeSimilarity(tree_gt, best_tree, normalize = TRUE)
+  
+  temp <- data.frame(mse_nj = mse_init,mse_lm = mse_best,rf_nj = rf_init,rf_lm = rf_best,nye_nj = nye_init,nye_lm = nye_best)
+  df_stats <- rbind(df_stats,temp)
+}
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_sep = "_",
+    values_to = "value"
+  )
+ggplot(df_long, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: Neighbor Joining vs LineageMap",
+    x = "Method",
+    y = "Value"
+  ) +
+  scale_fill_manual(values = c("nj" = "skyblue", "lm" = "tomato"))
+
+df_benchmark <- df_combined %>% arrange(cellid)
+gt_x <- c(df_benchmark$x[1:16],0,df_benchmark$x[17:30])
+gt_y <- c(df_benchmark$y[1:16],0,df_benchmark$y[17:30])
+mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+plot(best_tree)
+
+tree_gt <- cifs[[4]]
+tree_gt$tip.label <- as.character(1:16)
+#tree_gt$tip.label <- paste0("cell_",as.character(1:16))
+rf_init <- RF.dist(tree_gt,tree_init, normalize = TRUE)
+rf_best <- RF.dist(tree_gt,best_tree, normalize = TRUE)
+nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+nye_best <- NyeSimilarity(tree_gt, best_tree, normalize = TRUE)
+
+print(c(mse_init,mse_best,rf_init,rf_best,nye_init,nye_best))
+
+
+```
+
+```{r}
+df_new <- df_combined %>% arrange(cellid)
+df_new$x <- loc_infer$x[2:31]
+df_new$y <- loc_infer$y[2:31]
+
+
+fig <- plot_ly(df_combined, x = ~x, y = ~y, z = ~z, 
+               color = ~color, colors = colors) %>%
+  add_markers()
+
+unique_z <- unique(df_combined$z)
+for (z_level in unique_z) {
+  fig <- fig %>% add_trace(
+    type = "mesh3d",
+    x = c(-4, 4, 4, -4),  # Plane corners (x)
+    y = c(-4, -4, 4, 4),  # Plane corners (y)
+    z = rep(z_level, 4),  # Constant Z level
+    color = I("gray"),   # Strictly gray color
+    opacity = 0.2,       # Transparency
+    showscale = FALSE
+  )
+}
+
+# Step 1: Find points that should be connected across slices
+df_combined <- df_combined %>%
+  arrange(color,z)  # Ensure points are grouped logically
+
+# Step 2: Add connecting lines
+for (gen in unique_z) {
+  if (gen != min(unique_z)){
+    print("adding a line")
+    parents <- df_combined[df_combined$z == gen,]
+    
+    for (i in 1:nrow(parents)){
+      parent <- parents[i,]
+      if (gen > 6){
+        children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$color == parent$color),]
+        for (j in 1:nrow(children_nodes)){
+          subset_df <- rbind(parent,children_nodes[j,])
+          fig <- fig %>% add_trace(
+            type = "scatter3d",
+            mode = "lines",
+            x = subset_df$x,
+            y = subset_df$y,
+            z = subset_df$z,
+            line = list(color = "black"),
+            showlegend = FALSE,
+            inherit = FALSE
+          )   
+        }
+      } else if (gen == 6){
+        children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$color == i),]
+        for (j in 1:nrow(children_nodes)){
+          subset_df <- rbind(parent,children_nodes[j,])
+          fig <- fig %>% add_trace(
+            type = "scatter3d",
+            mode = "lines",
+            x = subset_df$x,
+            y = subset_df$y,
+            z = subset_df$z,
+            line = list(color = "black"),
+            showlegend = FALSE,
+            inherit = FALSE
+          )   
+        }
+      } else if (gen == 3){
+          children_nodes<- df_combined[(df_combined$z == gen-3) &(df_combined$cellid >= 2*i-1)&(df_combined$cellid <= 2*i),]
+          for (j in 1:nrow(children_nodes)){
+            subset_df <- rbind(parent,children_nodes[j,])
+            fig <- fig %>% add_trace(
+              type = "scatter3d",
+              mode = "lines",
+              x = subset_df$x,
+              y = subset_df$y,
+              z = subset_df$z,
+              line = list(color = "black"),
+              showlegend = FALSE,
+              inherit = FALSE
+            )   
+          }
+      }
+    }
+  }
+}
+z_labels <- setNames(c("Gen 5", "Gen 2", "Gen 3", "Gen 4"), unique_z)
+
+
+fig <- fig %>% layout(scene = list(xaxis = list(title = 'x'),
+                                   yaxis = list(title = 'y'),
+                                  zaxis = list(
+    title = 'Lineage generation',
+    tickvals = unique_z,     # Use the unique Z values for placement
+    ticktext = z_labels      # Display these as labels instead of numbers
+  )))
+
+fig
+```
+
+```{r}
+muts <- cifs[[7]]
+rownames(muts) <- paste("cell",states[,4],sep = "_")
+muts_leaves <- muts[1:ncells,]
+X <- muts_leaves
+l <- dim(X)[1]
+rownames(X) <- 1:l
+sim_tree <- list()
+
+for (j in 1:l) {
+  sim_tree[[j]] <- as.character(X[j,])
+}
+
+names(sim_tree) <- rownames(X)
+#nmstrings <- c('0','-',c(1:100))
+nmstrings <- unique(unlist(sim_tree))
+sim_data <- phyDat(sim_tree, type = 'USER', levels = nmstrings)
+
+#dist_wh2 <- WH(sim_data, InfoW, dropout=TRUE)
+dist_h <- dist.hamming(sim_data)
+heatmap(as.matrix(dist_h))
+tree_nj_ih <- NJ_ih(dist_h,loc_data)
+tree_nj_ih <- multi2di(tree_nj_ih)
+tree_nj_ih$edge.length <- rep(1, length(tree_nj_ih$edge.length))
+tree_nj <- NJ_from_barcode(muts_leaves)
+
+dist_weighted <- dist_h + 0.01 *dist(loc_data)
+tree_nj_weighted <- nj(dist_weighted)
+tree_nj_weighted <- multi2di(tree_nj_weighted)
+tree_nj_weighted$edge.length <- rep(1, length(tree_nj_weighted$edge.length))
+```
+
+
+```{r}
+n_data <- 20
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+for (k in 1:n_data){
+  set.seed(seeds[k])
+  ncells <- 16
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 1
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 1
+  N_char <- 6
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.1,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  
+  
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+
+  # --- Initialization ---
+  muts <- as.data.frame(muts_leaves)
+  
+  # Starting tree (barcode only; you can replace with Tree_from_barcode_spatial)
+  tree <- NJ_from_barcode(muts)
+  tree$edge.length <- rep(1, length(tree$edge.length))
+  tree_init <- tree
+  
+  loc_data <- df_spatial_continuous %>% select(x, y)
+  
+  # Initial likelihood evaluation
+  returnlist <- LikelihoodCal_ST(
+    tree, muts, df_spatial_continuous$state, phyla, loc_data,
+    lambda1 = 0, lambda2 = 0.1, alpha = 1
+  )
+  
+  max_likelihood <- returnlist$likelihood
+  current_likelihood <- max_likelihood
+  loc_infer <- returnlist$loc_data
+  muts_internal <- returnlist$muts_internal
+  lambda_restart <- 0
+  restart_count <- 0
+  
+  # Tracking containers
+  likelihood_curve <- numeric()
+  best_tree <- tree
+  best_tree_list <- list()
+  best_loc_list <- list()
+  maxl_list <- numeric()
+  
+  ptm <- proc.time()
+  LikelihoodCal_time <- 0
+  TreeLC_time <- 0
+  maxIter <- 5000
+  
+  # --- Local Search Loop ---
+  for (i in 1:maxIter) {
+    set.seed(seeds[k+i])
+    # --- Tree proposal ---
+    c_time <- proc.time()
+    tree_new <- TreeLC2(tree, muts_internal,loc_infer)  # proposal operator
+    TreeLC_time <- TreeLC_time + proc.time() - c_time
+    
+    # --- Likelihood calculation ---
+    c_time <- proc.time()
+    returnlist <- LikelihoodCal_ST(
+      tree_new, muts, df_spatial_continuous$state, phyla, loc_data,
+      lambda1 = 0, lambda2 = 0.1, alpha = 1
+    )
+    likelihood_new <- returnlist$likelihood
+    loc_infer <- returnlist$loc_data
+    muts_internal <- returnlist$muts_internal
+    LikelihoodCal_time <- LikelihoodCal_time + proc.time() - c_time
+    
+    # --- Record likelihoods ---
+    current_likelihood <- likelihood_new
+    likelihood_curve <- c(likelihood_curve, max_likelihood)
+    
+    # --- Update best state if improved ---
+    if (likelihood_new > max_likelihood) {
+      max_likelihood <- likelihood_new
+      tree <- tree_new
+      best_tree <- tree
+      best_loc <- loc_infer
+    }
+    
+    # --- Progress report ---
+    if (i %% 20 == 0) {
+      msg <- sprintf(
+        "Iter %d | Current likelihood = %.4f | Best likelihood = %.4f",
+        i, current_likelihood, max_likelihood
+      )
+      print(msg)
+    }
+    
+    # --- Local optima detection ---
+    if (i > 100) {
+      recent_vals <- likelihood_curve[(i - 20):i]
+      if ((length(unique(recent_vals)) == 1) & (restart_count == 5)) {
+        print("restart with a new joint NJ tree...")
+        # Record the local optima
+        best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+        best_loc_list[[length(best_loc_list) + 1]] <- best_loc
+        maxl_list <- c(maxl_list, max_likelihood)
+        
+        # Restart from a new starting tree (barcode+spatial mix)
+        set.seed(seeds[k]+i)
+        lambda_restart <- 1 - i / (2 * maxIter)  # gradually shift weight
+        tree <- starting_tree_from_data(muts, loc_data, lambda = lambda_restart)
+        tree$edge.length <- rep(1, length(tree$edge.length))
+        
+        returnlist <- LikelihoodCal_ST(
+          tree, muts, df_spatial_continuous$state, phyla, loc_data,
+          lambda1 = 0, lambda2 = 0.1, alpha = 1
+        )
+        max_likelihood <- returnlist$likelihood
+        loc_infer <- returnlist$loc_data
+        muts_internal <- returnlist$muts_internal
+        restart_count <- 0
+      } else if ((length(unique(recent_vals)) == 1) & (restart_count < 5)){
+        restart_count <- restart_count + 1
+        print("restart with the current NJ tree...")
+        # Record the local optima
+        best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+        best_loc_list[[length(best_loc_list) + 1]] <- best_loc
+        maxl_list <- c(maxl_list, max_likelihood)
+        
+        tree <- starting_tree_from_data(muts, loc_data, lambda = lambda_restart)
+        tree$edge.length <- rep(1, length(tree$edge.length))
+        
+        returnlist <- LikelihoodCal_ST(
+          tree, muts, df_spatial_continuous$state, phyla, loc_data,
+          lambda1 = 0, lambda2 = 0.1, alpha = 1
+        )
+        max_likelihood <- returnlist$likelihood
+        loc_infer <- returnlist$loc_data
+        muts_internal <- returnlist$muts_internal
+      }
+    }
+  }
+  total_time <- proc.time() - ptm
+  total_time
+  
+  #plot(likelihood_curve)
+  df_benchmark <- df_combined %>% arrange(cellid)
+  loc_infer <- best_loc_list[[which.max(maxl_list)]]
+  
+  # --- Ground truth coordinates (with internal node 0s) ---
+  gt_x <- c(df_benchmark$x[1:16], 0, df_benchmark$x[17:30])
+  gt_y <- c(df_benchmark$y[1:16], 0, df_benchmark$y[17:30])
+  
+  # --- Coordinate MSE ---
+  mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+  mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+  
+  # --- Ground truth tree ---
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(match(1:16, order))
+  
+  # --- Strict tree metrics ---
+  rf_init <- RF.dist(tree_gt, tree_init, normalize = TRUE)
+  nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+  rf_best <- RF.dist(tree_gt, best_tree_list[[which.max(maxl_list)]], normalize = TRUE)
+  nye_best <- NyeSimilarity(tree_gt, best_tree_list[[which.max(maxl_list)]], normalize = TRUE)
+  
+  # --- NEW softer metrics ---
+  
+  ## 1. Ancestor-descendant agreement
+  ancestor_agreement <- function(tree_true, tree_infer) {
+    tips <- tree_true$tip.label
+    correct <- 0
+    total <- 0
+    for (tip in tips) {
+      anc_true <- Ancestors(tree_true, tip, type = "all")
+      anc_infer <- Ancestors(tree_infer, tip, type = "all")
+      total <- total + length(anc_true)
+      correct <- correct + sum(anc_true %in% anc_infer)
+    }
+    return(correct / total)
+  }
+  anc_best <- ancestor_agreement(tree_gt, best_tree_list[[which.max(maxl_list)]])
+  anc_init <- ancestor_agreement(tree_gt, tree_init)
+  
+  ## 2. Path-length correlation
+  dist_true <- cophenetic(tree_gt)
+  dist_infer <- cophenetic(best_tree_list[[which.max(maxl_list)]])
+  dist_init <- cophenetic(tree_init)
+  common_tips <- intersect(rownames(dist_true), rownames(dist_infer))
+  pl_corr_best <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_infer[common_tips, common_tips]))
+  
+  common_tips <- intersect(rownames(dist_true), rownames(dist_init))
+  pl_corr_init <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_init[common_tips, common_tips]))
+  
+  ## 3. Clonal clustering (using k-means on coords as proxy)
+  true_labels <- df_benchmark$color[order]  # supply from GT
+  
+  infer_labels <- cutree(hclust(as.dist(dist_infer), method = "average"), k = 4)
+  clonal_ARI_best <- adjustedRandIndex(true_labels, infer_labels)
+  
+  infer_labels <- cutree(hclust(as.dist(dist_init), method = "average"), k = 4)
+  clonal_ARI_init <- adjustedRandIndex(true_labels, infer_labels)
+  
+  ## 4. State spatial clustering consistency
+  state_labels <- c(df_benchmark$state[order],df_benchmark$state[17:30])
+  
+  sil_true <- silhouette(as.integer(factor(state_labels)), dist(cbind(df_benchmark$x, df_benchmark$y)))
+  sil_infer <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_infer$x[-17], loc_infer$y[-17])))
+  sil_init <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_init$x[-17], loc_init$y[-17])))
+  state_sil_diff_best <- mean(sil_infer[, 3]) - mean(sil_true[, 3])
+  state_sil_diff_init <- mean(sil_init[, 3]) - mean(sil_true[, 3])
+  
+  # --- Collect results ---
+  benchmark_results <- data.frame(
+    mse_nj = mse_init,
+    mse_lm = mse_best,
+    rf_nj = rf_init,
+    rf_lm = rf_best,
+    nye_nj = nye_init,
+    nye_lm = nye_best,
+    ancestor_accuracy_lm = anc_best,
+    ancestor_accuracy_nj = anc_init,
+    path_length_corr_lm = pl_corr_best,
+    path_length_corr_nj = pl_corr_init,
+    clonal_ARI_lm = clonal_ARI_best,
+    clonal_ARI_nj = clonal_ARI_init,
+    state_sil_diff_lm = state_sil_diff_best,
+    state_sil_diff_nj = state_sil_diff_init
+  )
+  df_stats <- rbind(df_stats,benchmark_results)
+}
+#improve_list <- c()
+#for (i in 1:nrow(df_stats)){
+# if (df_stats$rf_nj[i] != df_stats$rf_lm[i]){
+#   improve_list <- c(improve_list,i)
+# }
+#}
+#df_stats <- df_stats[improve_list,]
+
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_pattern = "(.*)_(nj|lm)",
+    values_to = "value"
+  )
+
+df_long_vis <- df_long[df_long$metric %in% c("ancestor_accuracy","mse","state_sil_diff"),]
+ggplot(df_long_vis, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: Neighbor Joining vs LineageMap",
+    x = "Method",
+    y = "Value"
+  ) +
+  scale_fill_manual(values = c("nj" = "skyblue", "lm" = "tomato"))
+```
+
+```{r}
+mean_table <- df_long %>%
+  group_by(metric, method) %>%
+  summarise(mean_value = median(value, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = method, values_from = mean_value)
+
+print(mean_table)
+```
+
+
+```{r}
+better_lower <- c("rf","mse", "state_sil_diff") # lower is better
+better_higher <- c( "nye", "ancestor_accuracy", "path_length_corr", "clonal_ARI")
+
+# Function to bold the better value
+bold_better <- function(val1, val2, metric) {
+  if (any(grepl(metric, better_lower))) {
+    # lower is better
+    if (val1 < val2) {
+      return(c(paste0("\\textbf{", round(val1, 3), "}"), round(val2, 3)))
+    } else {
+      return(c(round(val1, 3), paste0("\\textbf{", round(val2, 3), "}")))
+    }
+  } else {
+    # higher is better
+    if (val1 > val2) {
+      return(c(paste0("\\textbf{", round(val1, 3), "}"), round(val2, 3)))
+    } else {
+      return(c(round(val1, 3), paste0("\\textbf{", round(val2, 3), "}")))
+    }
+  }
+}
+
+# Build LaTeX table row by row
+latex_rows <- apply(df_stats, 1, function(row) {
+  metrics <- unique(sub("_(nj|lm)", "", names(row)))
+  cells <- c()
+  for (m in metrics) {
+    pair <- bold_better(
+      as.numeric(row[paste0(m, "_lm")]),
+      as.numeric(row[paste0(m, "_nj")]),
+      m
+    )
+    cells <- c(cells, pair)
+  }
+  paste(cells, collapse = " & ")
+})
+
+# Build full LaTeX table
+metrics <- unique(sub("_(nj|lm)", "", names(df_stats)))
+header <- paste(
+  sapply(metrics, function(m) paste0(m, " (lm & nj)")),
+  collapse = " & "
+)
+
+latex_table <- paste0("
+\\begin{table}[ht]
+\\centering
+\\caption{Comparison of LineageMap (lm) vs Neighbor Joining (nj) across ", nrow(df_stats), " datasets}
+\\begin{tabular}{", paste(rep("cc", length(metrics)), collapse="|"), "}
+\\hline
+", paste(sapply(metrics, function(m) paste0(m, " (lm) & ", m, " (nj)")), collapse = " & "), " \\\\
+\\hline
+", paste(latex_rows, collapse = " \\\\\n"), "
+\\\\
+\\hline
+\\end{tabular}
+\\end{table}
+")
+
+cat(latex_table)
+```
+
+```{r}
+n_data <- 20
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+for (k in 1:n_data){
+  set.seed(seeds[k])
+  ncells <- 16
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 1
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 1
+  N_char <- 4
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.05,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  
+  
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+
+  muts <- as.data.frame(muts_leaves)
+  tree <- NJ_from_barcode(muts)
+  #tree <- rtree(16)
+  labels = rownames(muts)
+  #tree <- rtree(length(labels), rooted = TRUE, tip.label = labels)
+  tree$edge.length <- rep(1, length(tree$edge.length))
+  tree_init <- tree
+  state_lineages <- read.tree(text='((1:4, (2:2, 3:2):2):2);')
+  edges <- tree$edge
+  #maxcl <- LikelihoodCal(tree,muts_leaves,cell_meta$cluster_kmeans,state_lineages)
+  loc_data <- df_spatial_continuous%>%select(x,y)
+  #colnames(loc_data) <- c("x","y")
+  #states_fake <- c(1,1,1,1,2,2,2,2,3,3,3,3,1,5,5,5)
+  returnlist <- LikelihoodCal_ST(tree, muts, df_spatial_continuous$state, phyla, loc_data,lambda1 = 0,lambda2 = 0.1,alpha = 1)
+  #returnlist <- LikelihoodCal_ST(tree, muts, states_fake, phyla, loc_data,lambda2 = lambda2)
+  max_likelihood <- returnlist$likelihood
+  loc_init <- returnlist$loc_data
+  muts_internal <- returnlist$muts_internal
+
+  maxl_list <- c()
+  ptm <- proc.time()
+  LikelihoodCal_time <- 0
+  TreeLC_time <- 0
+  maxIter <- 1000
+  # ---------------------------
+  # Replace the original for-loop with this simulated annealing loop
+  # ---------------------------
+  set.seed(seeds[k])
+  
+  # SA parameters (tune if needed)
+  T0 <- 1.0           # initial temperature
+  cooling <- 0.995    # geometric cooling, T <- T * cooling each iter
+  T <- T0
+  
+  likelihood_curve <- numeric(maxIter)
+  best_tree <- tree
+  best_loc <- loc_init
+  
+  # initialize current state to the NJ-derived initial tree and likelihood
+  curr_tree <- tree       # current chain state
+  curr_lik  <- max_likelihood
+  
+  ptm_loop <- proc.time()
+  for (i in 1:maxIter) {
+    set.seed(seeds[k+i])
+    # 1) Propose a new tree (use your TreeLC2 proposal)
+    c_time <- proc.time()
+    tree_new <- TreeLC2(curr_tree, muts_internal)
+    TreeLC_time <- TreeLC_time + (proc.time() - c_time)
+    
+    # ensure edge.length exists (your code assumes it)
+    if (is.null(tree_new$edge.length)) tree_new$edge.length <- rep(1, nrow(tree_new$edge))
+    
+    # 2) Evaluate new tree likelihood
+    c_time <- proc.time()
+    returnlist_new <- LikelihoodCal_ST(tree_new, muts, df_spatial_continuous$state, phyla, loc_data,
+                                      lambda1 = 0, lambda2 = 0.1, alpha = 1)
+    LikelihoodCal_time <- LikelihoodCal_time + (proc.time() - c_time)
+    lik_new <- returnlist_new$likelihood
+    
+    # 3) Metropolis / Simulated Annealing acceptance
+    delta <- lik_new - curr_lik
+    accept_prob <- if (delta >= 0) 1 else exp(delta / T)
+    if (runif(1) < accept_prob) {
+      # accept proposal as current chain state
+      curr_tree <- tree_new
+      curr_lik  <- lik_new
+      muts_internal <- returnlist_new$muts_internal
+      loc_infer <- returnlist_new$loc_data
+      
+      # if this is the best overall, update best_tree & records
+      if (lik_new > max_likelihood) {
+        max_likelihood <- lik_new
+        best_tree <- tree_new
+        best_loc  <- loc_infer
+      }
+    } else {
+      # reject: keep curr_tree and curr_lik unchanged
+    }
+    
+    # record chain likelihood (current state)
+    likelihood_curve[i] <- curr_lik
+    
+    # cooling
+    T <- T * cooling
+    
+    # periodic reporting
+    if (i %% 100 == 0) {
+      msg <- sprintf("iter %4d | temp %.4g | curr_lik %.6g | best_lik %.6g", i, T, curr_lik, max_likelihood)
+      print(msg)
+    }
+    
+    # plateau detection and restart (retain your original logic, using likelihood_curve)
+    if (i > 100) {
+      last_vals <- likelihood_curve[(i - 20):i]
+      if (length(unique(last_vals)) == 1) {
+        # record local optima
+        best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+        maxl_list <- c(maxl_list, max_likelihood)
+        
+        # random / deterministic restart: reset chain to initial NJ tree
+        curr_tree <- tree_init
+        curr_tree$edge.length <- rep(1, length(curr_tree$edge.length))
+        # recompute its likelihood & state
+        returnlist_restart <- LikelihoodCal_ST(curr_tree, muts, df_spatial_continuous$state, phyla, loc_data,
+                                              lambda1 = 0, lambda2 = 10, alpha = 1)
+        curr_lik <- returnlist_restart$likelihood
+        muts_internal <- returnlist_restart$muts_internal
+        # also reset temperature if desired (optional)
+        T <- T0
+        #message(sprintf("[iter %d] plateau detected -> restarted chain; curr_lik reset to %g", i, curr_lik))
+      }
+    }
+  }
+  ptm_loop_elapsed <- proc.time() - ptm_loop
+  
+  # final bookkeeping: add best_tree to list
+  best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+  maxl_list <- c(maxl_list, max_likelihood)
+  
+  # plot trace if desired
+  plot(likelihood_curve, type = "l", xlab = "Iteration", ylab = "Current chain likelihood",
+       main = "Simulated Annealing trace")
+  
+  # print summary
+  cat(sprintf("SA done. Best likelihood = %g. Total time (loop) = %.2f sec\n",
+              max_likelihood, ptm_loop_elapsed["elapsed"]))
+  
+  df_benchmark <- df_combined %>% arrange(cellid)
+  gt_x <- c(df_benchmark$x[1:16],0,df_benchmark$x[17:30])
+  gt_y <- c(df_benchmark$y[1:16],0,df_benchmark$y[17:30])
+  mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+  mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+  #plot(best_tree)
+  
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(1:16)
+  #tree_gt$tip.label <- paste0("cell_",as.character(1:16))
+  rf_init <- RF.dist(tree_gt,tree_init, normalize = TRUE)
+  rf_best <- RF.dist(tree_gt,best_tree, normalize = TRUE)
+  nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+  nye_best <- NyeSimilarity(tree_gt, best_tree, normalize = TRUE)
+  
+  #rf_best <- 1
+  #nye_best <- 0
+  #best_index <- 0
+  #for (i in 1:length(best_tree_list)){
+  #  tree_lm <- best_tree_list[[k]]
+  #  if (RF.dist(tree_gt,tree_lm, normalize = TRUE) < rf_best){
+  #    rf_best <- RF.dist(tree_gt,tree_lm, normalize = TRUE)
+  #    best_index <- k
+  #  }
+  #  if ( NyeSimilarity(tree_gt, tree_lm, normalize = TRUE) > nye_best){
+  #    nye_best <- NyeSimilarity(tree_gt, tree_lm, normalize = TRUE)
+  #  }
+  #}
+  #plot(tree_init)
+  #plot(best_tree_list[[best_index]])
+  temp <- data.frame(mse_nj = mse_init,mse_lm = mse_best,rf_nj = rf_init,rf_lm = rf_best,nye_nj = nye_init,nye_lm = nye_best)
+  df_stats <- rbind(df_stats,temp)
+}
+
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_sep = "_",
+    values_to = "value"
+  )
+ggplot(df_long, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: Neighbor Joining vs LineageMap",
+    x = "Method",
+    y = "Value"
+  ) +
+  scale_fill_manual(values = c("nj" = "skyblue", "lm" = "tomato"))
+```
+
+```{r}
+run_chain <- function(chain_id, seeds, muts_leaves, df_spatial_continuous, phyla, maxIter = 1000,lambda_restart = 0.1) {
+  # --- Initialization ---
+  set.seed(seeds[chain_id])
+  
+  muts <- as.data.frame(muts_leaves)
+  loc_data <- df_spatial_continuous%>%select(x,y)
+  
+  # Starting tree
+  tree <- starting_tree_from_data(muts, loc_data, lambda = lambda_restart)
+  tree$edge.length <- rep(1, length(tree$edge.length))
+  tree_init <- tree
+  
+  loc_data <- df_spatial_continuous %>% select(x, y)
+  
+  # Initial likelihood evaluation
+  returnlist <- LikelihoodCal_ST(
+    tree, muts, df_spatial_continuous$state, phyla, loc_data,
+    lambda1 = 0, lambda2 = 0.1, alpha = 1
+  )
+  
+  max_likelihood <- returnlist$likelihood
+  current_likelihood <- max_likelihood
+  loc_infer <- returnlist$loc_data
+  best_loc <- loc_infer
+  best_tree <- tree
+  muts_internal <- returnlist$muts_internal
+  #lambda_restart <- 0
+  restart_count <- 0
+  
+  # Tracking containers
+  likelihood_curve <- numeric()
+  best_tree <- tree
+  best_tree_list <- list()
+  best_loc_list <- list()
+  maxl_list <- numeric()
+  
+  LikelihoodCal_time <- 0
+  TreeLC_time <- 0
+  
+  # --- Local Search Loop ---
+  for (i in 1:maxIter) {
+    set.seed(seeds[chain_id] + i)
+    # Tree proposal
+    c_time <- proc.time()
+    tree_new <- TreeLC2(tree, muts_internal, loc_infer)
+    TreeLC_time <- TreeLC_time + proc.time() - c_time
+    
+    # Likelihood
+    c_time <- proc.time()
+    returnlist <- LikelihoodCal_ST(
+      tree_new, muts, df_spatial_continuous$state, phyla, loc_data,
+      lambda1 = 0, lambda2 = 0.1, alpha = 1
+    )
+    likelihood_new <- returnlist$likelihood
+    loc_infer <- returnlist$loc_data
+    muts_internal <- returnlist$muts_internal
+    LikelihoodCal_time <- LikelihoodCal_time + proc.time() - c_time
+    
+    # Record likelihoods
+    current_likelihood <- likelihood_new
+    likelihood_curve <- c(likelihood_curve, max_likelihood)
+    
+    # Update best
+    if (likelihood_new > max_likelihood) {
+      max_likelihood <- likelihood_new
+      tree <- tree_new
+      best_tree <- tree
+      best_loc <- loc_infer
+    }
+    
+    # Progress
+    if (i %% 100 == 0) {
+      msg <- sprintf(
+        "Chain %d | Iter %d | Current likelihood = %.4f | Best likelihood = %.4f",
+        chain_id, i, current_likelihood, max_likelihood
+      )
+      print(msg)
+    }
+    
+    # Local optima detection (same as your original)
+    if (i > 100) {
+      recent_vals <- likelihood_curve[(i - 20):i]
+      if (length(unique(recent_vals)) == 1) {
+        best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+        best_loc_list[[length(best_loc_list) + 1]] <- best_loc
+        maxl_list <- c(maxl_list, max_likelihood)
+        
+        set.seed(seeds[chain_id] + i)
+        #lambda_restart <- 1 - i / (2 * maxIter)
+        tree <- tree_init
+        
+        returnlist <- LikelihoodCal_ST(
+          tree, muts, df_spatial_continuous$state, phyla, loc_data,
+          lambda1 = 0, lambda2 = 0.1, alpha = 1
+        )
+        max_likelihood <- returnlist$likelihood
+        loc_infer <- returnlist$loc_data
+        muts_internal <- returnlist$muts_internal
+      } 
+    }
+  }
+  
+  return(list(
+    best_tree = best_tree,
+    best_loc = best_loc,
+    likelihood_curve = likelihood_curve,
+    max_likelihood = max_likelihood,
+    all_trees = best_tree_list,
+    all_locs = best_loc_list,
+    all_maxl = maxl_list
+  ))
+}
+```
+
+```{r}
+n_data <- 10
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+for (k in 1:n_data){
+  set.seed(seeds[k])
+  ncells <- 64
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 1
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 1
+  N_char <- 100
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.1,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  df_combined <- rbind(returnlist[[1]] ,returnlist[[2]][[1]],returnlist[[2]][[2]],returnlist[[2]][[3]])
+  
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+  tree_init <- NJ_from_barcode(muts_leaves)
+  
+  
+  n_chains <- detectCores()/2   # use all but one core
+  lambda_values <- seq(0.5, 1, length.out = n_chains)
+  results <- mclapply(
+    1:n_chains,
+    function(chain_id) run_chain(chain_id, seeds, muts_leaves, df_spatial_continuous, phyla, maxIter = 1000,lambda_restart = lambda_values[chain_id]),
+    mc.cores = n_chains
+  )
+  
+  # Find best chain
+  best_idx <- which.max(sapply(results, function(x) x$max_likelihood))
+  best_result <- results[[best_idx]]
+  max_likelihood <- best_result
+  best_tree <- best_result$best_tree
+  loc_infer <- best_result$best_loc
+
+  cat("Best likelihood across chains:", best_result$max_likelihood, "\n")
+  
+  #plot(likelihood_curve)
+  df_benchmark <- df_combined %>% arrange(cellid)
+  #loc_infer <- best_loc_list[[which.max(maxl_list)]]
+  
+  # --- Ground truth coordinates (with internal node 0s) ---
+  gt_x <- c(df_benchmark$x[order], 0, df_benchmark$x[17:30])
+  gt_y <- c(df_benchmark$y[order], 0, df_benchmark$y[17:30])
+  
+  # --- Coordinate MSE ---
+  mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+  mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+  
+  # --- Ground truth tree ---
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(match(1:16, order))
+  
+  # --- Strict tree metrics ---
+  rf_init <- RF.dist(tree_gt, tree_init, normalize = TRUE)
+  nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+  rf_best <- RF.dist(tree_gt, best_tree, normalize = TRUE)
+  nye_best <- NyeSimilarity(tree_gt, best_tree, normalize = TRUE)
+  
+  # --- NEW softer metrics ---
+  
+  ## 1. Ancestor-descendant agreement
+  ancestor_agreement <- function(tree_true, tree_infer) {
+    tips <- tree_true$tip.label
+    correct <- 0
+    total <- 0
+    for (tip in tips) {
+      anc_true <- Ancestors(tree_true, tip, type = "all")
+      anc_infer <- Ancestors(tree_infer, tip, type = "all")
+      total <- total + length(anc_true)
+      correct <- correct + sum(anc_true %in% anc_infer)
+    }
+    return(correct / total)
+  }
+  anc_best <- ancestor_agreement(tree_gt, best_tree)
+  anc_init <- ancestor_agreement(tree_gt, tree_init)
+  
+  ## 2. Path-length correlation
+  dist_true <- cophenetic(tree_gt)
+  dist_infer <- cophenetic(best_tree)
+  dist_init <- cophenetic(tree_init)
+  common_tips <- intersect(rownames(dist_true), rownames(dist_infer))
+  pl_corr_best <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_infer[common_tips, common_tips]))
+  
+  common_tips <- intersect(rownames(dist_true), rownames(dist_init))
+  pl_corr_init <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_init[common_tips, common_tips]))
+  
+  ## 3. Clonal clustering (using k-means on coords as proxy)
+  true_labels <- c(1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4)[order]  # supply from GT
+  
+  infer_labels <- cutree(hclust(as.dist(dist_infer), method = "average"), k = 4)
+  clonal_ARI_best <- adjustedRandIndex(true_labels, infer_labels)
+  
+  infer_labels <- cutree(hclust(as.dist(dist_init), method = "average"), k = 4)
+  clonal_ARI_init <- adjustedRandIndex(true_labels, infer_labels)
+  
+  ## 4. State spatial clustering consistency
+  state_labels <- c(df_benchmark$state[order],df_benchmark$state[17:30])
+  
+  sil_true <- silhouette(as.integer(factor(state_labels)), dist(cbind(df_benchmark$x, df_benchmark$y)))
+  sil_infer <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_infer$x[-17], loc_infer$y[-17])))
+  sil_init <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_init$x[-17], loc_init$y[-17])))
+  state_sil_diff_best <- mean(sil_infer[, 3]) - mean(sil_true[, 3])
+  state_sil_diff_init <- mean(sil_init[, 3]) - mean(sil_true[, 3])
+  
+  # --- Collect results ---
+  benchmark_results <- data.frame(
+    mse_nj = mse_init,
+    mse_lm = mse_best,
+    rf_nj = rf_init,
+    rf_lm = rf_best,
+    nye_nj = nye_init,
+    nye_lm = nye_best,
+    ancestor_accuracy_lm = anc_best,
+    ancestor_accuracy_nj = anc_init,
+    path_length_corr_lm = pl_corr_best,
+    path_length_corr_nj = pl_corr_init,
+    clonal_ARI_lm = clonal_ARI_best,
+    clonal_ARI_nj = clonal_ARI_init,
+    state_sil_diff_lm = state_sil_diff_best,
+    state_sil_diff_nj = state_sil_diff_init
+  )
+  df_stats <- rbind(df_stats,benchmark_results)
+}
+#improve_list <- c()
+#for (i in 1:nrow(df_stats)){
+# if (df_stats$rf_nj[i] != df_stats$rf_lm[i]){
+#   improve_list <- c(improve_list,i)
+# }
+#}
+#df_stats <- df_stats[improve_list,]
+
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_pattern = "(.*)_(nj|lm)",
+    values_to = "value"
+  )
+
+#df_long_vis <- df_long[df_long$metric %in% c("ancestor_accuracy","mse","state_sil_diff"),]
+df_long_vis <- df_long
+ggplot(df_long_vis, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: Neighbor Joining vs LineageMap",
+    x = "Method",
+    y = "Value"
+  ) +
+  scale_fill_manual(values = c("nj" = "skyblue", "lm" = "tomato"))
+```
+```{r}
+run_chain_exhaustive <- function(chain_id, seeds, muts_leaves, df_spatial_continuous, phyla,
+                                 maxIter = 1000, lambda_restart = 0.1) {
+  # --- Initialization ---
+  set.seed(seeds[chain_id])
+  
+  muts <- as.data.frame(muts_leaves)
+  loc_data <- df_spatial_continuous %>% dplyr::select(x, y)
+  
+  # Starting tree
+  tree <- starting_tree_from_data(muts, loc_data, lambda = lambda_restart)
+  tree$edge.length <- rep(1, length(tree$edge.length))
+  tree_init <- tree
+  
+  # Initial likelihood
+  returnlist <- LikelihoodCal_ST(
+    tree, muts, df_spatial_continuous$state, phyla, loc_data,
+    lambda1 = 0, lambda2 = 0.1, alpha = 1
+  )
+  
+  max_likelihood <- returnlist$likelihood
+  current_likelihood <- max_likelihood
+  loc_infer <- returnlist$loc_data
+  muts_internal <- returnlist$muts_internal
+  
+  # Tracking
+  likelihood_curve <- numeric()
+  best_tree <- tree
+  best_loc <- loc_infer
+  best_tree_list <- list()
+  best_loc_list <- list()
+  maxl_list <- numeric()
+  
+  # --- Local Search Loop ---
+  for (i in 1:maxIter) {
+    set.seed(seeds[chain_id] + i)
+    
+    # Generate all subtree swap proposals
+    c_time <- proc.time()
+    candidate_trees <- TreeLC2_exhaustive(tree, muts_internal, loc_infer)
+    TreeLC_time <- proc.time() - c_time
+    
+    if (length(candidate_trees) == 0) {
+      message(sprintf("Chain %d | Iter %d | No valid moves.", chain_id, i))
+      break
+    }
+    
+    # Evaluate likelihood for all proposals
+    candidate_scores <- numeric(length(candidate_trees))
+    candidate_locs   <- vector("list", length(candidate_trees))
+    candidate_muts   <- vector("list", length(candidate_trees))
+    
+    for (k in seq_along(candidate_trees)) {
+      returnlist <- LikelihoodCal_ST(
+        candidate_trees[[k]], muts, df_spatial_continuous$state, phyla, loc_data,
+        lambda1 = 0, lambda2 = 0.1, alpha = 1
+      )
+      candidate_scores[k] <- returnlist$likelihood
+      candidate_locs[[k]] <- returnlist$loc_data
+      candidate_muts[[k]] <- returnlist$muts_internal
+    }
+    
+    # Pick the best candidate
+    best_idx <- which.max(candidate_scores)
+    tree_new <- candidate_trees[[best_idx]]
+    likelihood_new <- candidate_scores[best_idx]
+    loc_infer <- candidate_locs[[best_idx]]
+    muts_internal <- candidate_muts[[best_idx]]
+    
+    # Update
+    current_likelihood <- likelihood_new
+    likelihood_curve <- c(likelihood_curve, max_likelihood)
+    
+    if (likelihood_new > max_likelihood) {
+      max_likelihood <- likelihood_new
+      tree <- tree_new
+      best_tree <- tree
+      best_loc <- loc_infer
+    }
+    
+    # Progress
+    if (i %% 10 == 0) {
+      msg <- sprintf(
+        "Chain %d | Iter %d | Current likelihood = %.4f | Best likelihood = %.4f",
+        chain_id, i, current_likelihood, max_likelihood
+      )
+      message(msg)
+    }
+    
+    # Local optima detection (same as before)
+    if (i > 10) {
+      recent_vals <- likelihood_curve[(i - 2):i]
+      if (length(unique(recent_vals)) == 1) {
+        best_tree_list[[length(best_tree_list) + 1]] <- best_tree
+        best_loc_list[[length(best_loc_list) + 1]] <- best_loc
+        maxl_list <- c(maxl_list, max_likelihood)
+        
+        # Restart
+        set.seed(seeds[chain_id] + i)
+        tree <- tree_init
+        returnlist <- LikelihoodCal_ST(
+          tree, muts, df_spatial_continuous$state, phyla, loc_data,
+          lambda1 = 0, lambda2 = 0.1, alpha = 1
+        )
+        max_likelihood <- returnlist$likelihood
+        loc_infer <- returnlist$loc_data
+        muts_internal <- returnlist$muts_internal
+      }
+    }
+  }
+  
+  return(list(
+    best_tree = best_tree,
+    best_loc = best_loc,
+    likelihood_curve = likelihood_curve,
+    max_likelihood = max_likelihood,
+    all_trees = best_tree_list,
+    all_locs = best_loc_list,
+    all_maxl = maxl_list
+  ))
+}
+```
+
+
+
+```{r}
+n_data <- 10
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+for (k in 1:n_data){
+  set.seed(seeds[k])
+  print(sprintf("running test No. %i",k))
+  ncells <- 1024
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 0
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 0
+  N_char <- 50
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.05,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  muts <- drop_characters(muts,drop_rate = 0.4,mode = "row")
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  df_combined <- rbind(returnlist[[1]])
+  for (i in 1:(length(returnlist[[2]])-1)){
+    df_combined <- rbind(df_combined,returnlist[[2]][[i]])
+  }
+  
+  tree_init <- NJ_from_barcode(muts_leaves)
+  result_init <- LikelihoodCal_ST(best_tree, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
+  lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_init <- result_init$loc_data
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+  
+  
+  best_tree <- Build_LineageMap(muts_leaves,df_spatial_continuous,phyla,threshold = 2/N_char,backbone_type = "NJ_median")
+  loc_data <- df_spatial_continuous %>% dplyr::select(x, y)
+  best_result <- LikelihoodCal_ST(best_tree, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
+    lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  # Find best chain
+  #best_idx <- which.max(sapply(results, function(x) x$max_likelihood))
+  #best_result <- results[[best_idx]]
+  max_likelihood <- best_result$likelihood
+  #best_tree <- best_result$best_tree
+  loc_infer <- best_result$loc_data
+
+  #cat("Best likelihood across chains:", best_result$max_likelihood, "\n")
+  
+  #plot(likelihood_curve)
+  df_benchmark <- df_combined %>% arrange(cellid)
+  #loc_infer <- best_loc_list[[which.max(maxl_list)]]
+  
+  # --- Ground truth coordinates (with internal node 0s) ---
+  gt_x <- c(df_benchmark$x[order], 0, df_benchmark$x[(ncells+1):(2*ncells - 2)])
+  gt_y <- c(df_benchmark$y[order], 0, df_benchmark$y[(ncells+1):(2*ncells - 2)])
+  loc_gt <- data.frame(x = gt_x,y = gt_y)
+  #colnames(loc_gt) <- c("x","y")
+  # --- Coordinate MSE ---
+  dens_true  <- kde2d(loc_gt[,1], loc_gt[,2], n = 50)
+  dens_infer <- kde2d(loc_infer[,1], loc_infer[,2], n = 50)
+  dens_infer_nj <- kde2d(loc_init[,1],loc_init[,2], n = 50)
+  kl_div <- sum(dens_true$z * log((dens_true$z + 1e-8) / (dens_infer$z + 1e-8)))
+  #mse_init <- mean((loc_init$x - gt_x)^2) + mean((loc_init$y - gt_y)^2)
+  #mse_best <- mean((loc_infer$x - gt_x)^2) + mean((loc_infer$y - gt_y)^2)
+  
+  # --- Ground truth tree ---
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(match(1:ncells, order))
+  tree_gt$tip.label <- as.character(1:ncells)
+  
+  # --- Strict tree metrics ---
+  rf_init <- RF.dist(tree_gt, tree_init, normalize = TRUE)
+  nye_init <- NyeSimilarity(tree_gt, tree_init, normalize = TRUE)
+  rf_best <- RF.dist(tree_gt, best_tree, normalize = TRUE)
+  nye_best <- NyeSimilarity(tree_gt, best_tree, normalize = TRUE)
+  
+  # --- NEW softer metrics ---
+  
+  ## 1. Ancestor-descendant agreement
+  ancestor_agreement <- function(tree_true, tree_infer) {
+    tips <- tree_true$tip.label
+    correct <- 0
+    total <- 0
+    for (tip in tips) {
+      anc_true <- Ancestors(tree_true, tip, type = "all")
+      anc_infer <- Ancestors(tree_infer, tip, type = "all")
+      total <- total + length(anc_true)
+      correct <- correct + sum(anc_true %in% anc_infer)
+    }
+    return(correct / total)
+  }
+  anc_best <- ancestor_agreement(tree_gt, best_tree)
+  anc_init <- ancestor_agreement(tree_gt, tree_init)
+  
+  ## 2. Path-length correlation
+  dist_true <- cophenetic(tree_gt)
+  dist_infer <- cophenetic(best_tree)
+  dist_init <- cophenetic(tree_init)
+  common_tips <- intersect(rownames(dist_true), rownames(dist_infer))
+  pl_corr_best <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_infer[common_tips, common_tips]))
+  
+  common_tips <- intersect(rownames(dist_true), rownames(dist_init))
+  pl_corr_init <- cor(as.vector(dist_true[common_tips, common_tips]),
+                 as.vector(dist_init[common_tips, common_tips]))
+  
+  ## 3. Clonal clustering (using k-means on coords as proxy)
+  true_labels <- c(rep(1,ncells/4),rep(2,ncells/4),rep(3,ncells/4),rep(4,ncells/4))[order]  # supply from GT
+  
+  infer_labels <- cutree(hclust(as.dist(dist_infer), method = "average"), k = 4)
+  clonal_ARI_best <- adjustedRandIndex(true_labels, infer_labels)
+  
+  infer_labels <- cutree(hclust(as.dist(dist_init), method = "average"), k = 4)
+  clonal_ARI_init <- adjustedRandIndex(true_labels, infer_labels)
+  
+  ## 4. State spatial clustering consistency
+  state_labels <- c(df_benchmark$state[order],df_benchmark$state[(ncells+1):(2*ncells - 2)])
+  
+  sil_true <- silhouette(as.integer(factor(state_labels)), dist(cbind(df_benchmark$x, df_benchmark$y)))
+  sil_infer <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_infer$x[-(ncells + 1)], loc_infer$y[-(ncells + 1)])))
+  sil_init <- silhouette(as.integer(factor(state_labels)), dist(cbind(loc_init$x[-(ncells + 1)], loc_init$y[-(ncells + 1)])))
+  if (!is.na(sil_true)){
+    state_sil_diff_best <- mean(sil_infer[, 3]) - mean(sil_true[, 3])
+    state_sil_diff_init <- mean(sil_init[, 3]) - mean(sil_true[, 3]) 
+  } else{
+    state_sil_diff_best <- 0
+    state_sil_diff_init <- 0
+  }
+  
+  # --- Collect results ---
+  benchmark_results <- data.frame(
+    mse_nj = mse_init,
+    mse_lm = mse_best,
+    rf_nj = rf_init,
+    rf_lm = rf_best,
+    nye_nj = nye_init,
+    nye_lm = nye_best,
+    ancestor_accuracy_lm = anc_best,
+    ancestor_accuracy_nj = anc_init,
+    path_length_corr_lm = pl_corr_best,
+    path_length_corr_nj = pl_corr_init,
+    clonal_ARI_lm = clonal_ARI_best,
+    clonal_ARI_nj = clonal_ARI_init,
+    state_sil_diff_lm = state_sil_diff_best,
+    state_sil_diff_nj = state_sil_diff_init
+  )
+  df_stats <- rbind(df_stats,benchmark_results)
+}
+#improve_list <- c()
+#for (i in 1:nrow(df_stats)){
+# if (df_stats$rf_nj[i] != df_stats$rf_lm[i]){
+#   improve_list <- c(improve_list,i)
+# }
+#}
+#df_stats <- df_stats[improve_list,]
+
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_pattern = "(.*)_(nj|lm)",
+    values_to = "value"
+  )
+
+#df_long_vis <- df_long[df_long$metric %in% c("ancestor_accuracy","mse","state_sil_diff"),]
+df_long_vis <- df_long
+ggplot(df_long_vis, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: Neighbor Joining vs LineageMap",
+    x = "Method",
+    y = "Value"
+  ) +
+  scale_fill_manual(values = c("nj" = "skyblue", "lm" = "tomato"))
+```
+
+```{r}
+n_data <- 10
+df_stats <- c()
+seeds <- runif(10000, 1, 99999)
+
+for (k in 1:n_data) {
+  set.seed(seeds[k])
+  print(sprintf("running test No. %i",k))
+  ncells <- 128
+  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
+  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
+  N_nodes <- 2*ncells-2
+  ngenes <- 500
+  max_walk <- 6
+  p_a <- 0
+  n_cif <- 30
+  n_diff <- 20
+  cif_step <- 0.25
+  p_d <- 0
+  N_char <- 50
+  
+  #Simulating gene expression data
+  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
+  
+  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.05,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
+  
+  #We only need the leaf cells for experiments
+  cif_leaves <- lapply(c(1:3),function(parami){
+    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
+    return(cif_leaves_all)
+  })
+  cif_res <- list(cif_leaves,cifs[[2]])
+  states <- cifs[[2]]
+  states <- states[1:N_nodes,]
+  states_leaves <- states[1:ncells,]
+  muts <- cifs[[7]]
+  muts <- drop_characters(muts,drop_rate = 0.2,mode = "row")
+  rownames(muts) <- paste("cell",states[,4],sep = "_")
+  muts_leaves <- muts[1:ncells,]
+  tree <- cifs[[4]]
+  
+  #simulate true counts
+  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
+  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
+  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
+  
+  #counts <- t(true_counts_res[[1]])
+  #rownames(counts) <- rownames(muts_leaves)
+  
+  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
+  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
+  df_spatial_continuous <- returnlist[[1]]
+  df_combined <- rbind(returnlist[[1]])
+  for (i in 1:(length(returnlist[[2]])-1)){
+    df_combined <- rbind(df_combined,returnlist[[2]][[i]])
+  }
+  
+  loc_data <- df_spatial_continuous%>%dplyr::select(x,y)
+  
+  #tree_init <- NJ_from_barcode(muts_leaves)
+  #result_init <- LikelihoodCal_ST(tree_init, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
+  #lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  #loc_init <- result_init$loc_data
+  order <- sample(nrow(muts_leaves))
+  df_spatial_continuous <- df_spatial_continuous[order,]
+  muts_leaves <- muts_leaves[order,]
+  
+  tree_init <- NJ_from_barcode(muts_leaves)
+  result_init <- LikelihoodCal_ST(tree_init, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
+  lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  tree_init$tip.label <- sub("cell_", "", tree_init$tip.label)
+  loc_init <- result_init$loc_data
+  
+
+  # LineageMap (mode = "majority")
+  tree_lm_majority <- Build_LineageMap_parallel(muts_leaves, df_spatial_continuous, phyla,
+                                       threshold = 2/N_char, backbone_type = "majority",outer_cores = 12,inner_cores = 5)
+  res_lm_majority <- LikelihoodCal_ST(tree_lm_majority, muts_leaves, df_spatial_continuous$state,
+                                      phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_lm_majority <- res_lm_majority$loc_data
+
+  # LineageMap (mode = "NJ_median")
+  tree_lm_nj <- Build_LineageMap_parallel(muts_leaves, df_spatial_continuous, phyla,
+                                 threshold = 2/N_char, backbone_type = "NJ_median")
+  res_lm_nj <- LikelihoodCal_ST(tree_lm_nj, muts_leaves, df_spatial_continuous$state,
+                                phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
+  loc_lm_nj <- res_lm_nj$loc_data
+  
+  #Add two more baselines: Cassiopeia and Startle
+  
+  # --- Coordinate MSE ---
+  df_benchmark <- df_combined %>% arrange(cellid)
+  gt_x <- c(df_benchmark$x[1:ncells], 0, df_benchmark$x[(ncells+1):(2*ncells - 2)])
+  gt_y <- c(df_benchmark$y[1:ncells], 0, df_benchmark$y[(ncells+1):(2*ncells - 2)])
+  
+  #calculate chronological_divergence_score
+  tree_gt <- cifs[[4]]
+  tree_gt$tip.label <- as.character(1:ncells)
+  loc_gt <- df_benchmark[1:ncells,]%>%dplyr::select(x,y)
+  cds_nj <- chronological_divergence_score(tree_gt, tree_init)
+  cds_lm_majority <- chronological_divergence_score(tree_gt, tree_lm_majority)
+  cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
+  
+  #calculate spatial topological consistency
+  stc_nj <- spatio_topological_consistency(tree_gt, tree_init, loc_data[1:ncells,], loc_gt)
+  stc_lm_majority <- spatio_topological_consistency(tree_gt, tree_lm_majority, loc_data[1:ncells,], loc_gt)
+  stc_lm_nj <- spatio_topological_consistency(tree_gt, tree_lm_nj, loc_data[1:ncells,], loc_gt)
+  
+  #calculate generation aware divergence
+  gad_nj <- generation_aware_divergence(tree_gt, tree_init)
+  gad_lm_majority <- generation_aware_divergence(tree_gt, tree_lm_majority)
+  gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
+  
+  #calculate spatial topolo
+  #csm_nj <- celltype_specific_metrics(tree_gt, tree_init, df_spatial_continuous$state, df_spatial_continuous$state)
+  #csm_lm_majority <- celltype_specific_metrics(tree_gt, tree_lm_majority, df_spatial_continuous$state, df_spatial_continuous$state)
+  #csm_lm_nj <- celltype_specific_metrics(tree_gt, tree_lm_nj, df_spatial_continuous$state, df_spatial_continuous$state)
+  
+  # Metrics helper
+  mse_fun <- function(loc,tree){
+    error <- 0
+    ncell <- length(tree$tip.label)
+    for (i in 1:ncell){
+      cell <- tree$tip.label[i]
+      cellid <- as.numeric(cell)
+      error <- error + (gt_x[tree_gt$edge[tree_gt$edge[,2] == i,1]] - loc$x[tree$edge[tree$edge[,2] == i,1]])^2 + (gt_y[tree_gt$edge[tree_gt$edge[,2] == i,1]]  - loc$y[tree$edge[tree$edge[,2] == i,1]])^2
+        #print(error)
+    }
+    
+    error / ncell
+  } 
+  rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
+  nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
+  anc_fun <- function(t) {
+    tips <- tree_gt$tip.label
+    correct <- 0; total <- 0
+    for (tip in tips) {
+      anc_true <- Ancestors(tree_gt, tip, type = "all")
+      anc_infer <- Ancestors(t, tip, type = "all")
+      total <- total + length(anc_true)
+      correct <- correct + sum(anc_true %in% anc_infer)
+    }
+    correct / total
+  }
+  path_corr_fun <- function(t) {
+    common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
+    cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
+        as.vector(cophenetic(t)[common_tips, common_tips]))
+  }
+
+  # Compute all metrics
+  benchmark_results <- data.frame(
+    mse_nj = mse_fun(loc_init),
+    mse_lm_majority = mse_fun(loc_lm_majority),
+    mse_lm_Q = mse_fun(loc_lm_nj),
+
+    rf_nj = rf_fun(tree_init),
+    rf_lm_majority = rf_fun(tree_lm_majority),
+    rf_lm_Q = rf_fun(tree_lm_nj),
+
+    nye_nj = nye_fun(tree_init),
+    nye_lm_majority = nye_fun(tree_lm_majority),
+    nye_lm_Q = nye_fun(tree_lm_nj),
+
+    ancestor_accuracy_nj = anc_fun(tree_init),
+    ancestor_accuracy_lm_majority = anc_fun(tree_lm_majority),
+    ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
+
+    path_length_corr_nj = path_corr_fun(tree_init),
+    path_length_corr_lm_majority = path_corr_fun(tree_lm_majority),
+    path_length_corr_lm_Q = path_corr_fun(tree_lm_nj),
+    
+    chronological_divergence_score_nj = cds_nj,
+    chronological_divergence_score_lm_majority = cds_lm_majority,
+    chronological_divergence_score_lm_Q = cds_lm_nj,
+    
+    generation_aware_divergence_nj = gad_nj$mean_error,
+    generation_aware_divergence_lm_majority = gad_lm_majority$mean_error,
+    generation_aware_divergence_lm_Q = gad_lm_nj$mean_error,
+    
+    spatio_topological_consistency_nj = stc_nj,
+    spatio_topological_consistency_lm_majority = stc_lm_majority,
+    spatio_topological_consistency_lm_Q = stc_lm_nj
+    
+  )
+
+  df_stats <- rbind(df_stats, benchmark_results)
+}
+#colnames(df_stats) <- c("mse_nj","mse_lm_majority","mse_lm_Q","rf_nj","rf_lm_majority","rf_lm_Q","nye_nj","nye_lm_majority","nye_lm_Q","ancestor_accuracy_nj","ancestor_accuracy_lm_majority","ancestor_accuracy_lm_Q","path_length_corr_nj","path_length_corr_lm_majority","path_length_corr_lm_Q")
+
+# Convert to long format
+df_long <- df_stats %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = c("metric", "method"),
+    names_pattern = "(.*)_(nj|lm_majority|lm_Q)",
+    values_to = "value"
+  )
+
+# Visualization
+ggplot(df_long, aes(x = method, y = value, fill = method)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
+  facet_wrap(~ metric, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Performance Comparison: NJ vs LineageMap (Majority & NJ_median)",
+    x = "Method",
+    y = "Metric Value"
+  ) +
+  scale_fill_manual(values = c(
+    "nj" = "skyblue",
+    "lm_majority" = "tomato",
+    "lm_Q" = "palegreen3"
+  ))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
