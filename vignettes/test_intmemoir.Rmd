@@ -50,7 +50,7 @@ expr_c2 <- expr_all[expr_all$colony == 2, ]
 tree_c2 <- read.tree("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/files_for_LMA/consensus_trees_col2_states_SBC_filt_BEAST_cons.newick")
 tree_c2_id <- read.tree("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/BEAST_analysis/Trial4/tree2_id.newick")
 tree_c2_id$edge.length <- rep(1,length(tree_c2_id$edge.length))
-tree_c2_id$tip.label <- paste0("cell_",tree_c2_id$tip.label)
+#tree_c2_id$tip.label <- paste0("cell_",tree_c2_id$tip.label)
 ```
 
 ```{r}
@@ -338,8 +338,11 @@ return(barcode_df)
 }
 
 data_sequence <- read.sequence("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/all_position_barcodes/p2_barcs.nexus")
+phyla <- read.tree(text='((1:2, (4:1, 5:1):1):1);')
+loc_data <- loc_data_2%>%dplyr::select(x_pos,y_pos)
+colnames(loc_data) <- c("x","y")
 data_sequence[data_sequence == "?"] <- "-"
-df_spatial_continuous <- data.frame(cellid = paste0("cell_",expr_sub$cellID),x = loc_data$x,y = loc_data$y,state = expr_sub$state)
+df_spatial_continuous <- data.frame(cellid = paste0("cell_",expr_sub$cellID),x = loc_data$x,y = loc_data$y,state = loc_data_2$cell_state)
 tree_lm_nj <- Build_LineageMap_pd(data_sequence, df_spatial_continuous, phyla,
                                        threshold = 0.2, backbone_type = "NJ_median",outer_cores = 12,inner_cores = 5,lambda1 = 0.05,lambda2 = 0.1,alpha = 1)
 
@@ -359,6 +362,25 @@ cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
 gad_nj <- generation_aware_divergence(tree_gt, tree_init)
 gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
 
+rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
+nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
+anc_fun <- function(t) {
+  tips <- tree_gt$tip.label
+  correct <- 0; total <- 0
+  for (tip in tips) {
+    anc_true <- Ancestors(tree_gt, tip, type = "all")
+    anc_infer <- Ancestors(t, tip, type = "all")
+    total <- total + length(anc_true)
+    correct <- correct + sum(anc_true %in% anc_infer)
+  }
+  correct / total
+}
+path_corr_fun <- function(t) {
+  common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
+  cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
+      as.vector(cophenetic(t)[common_tips, common_tips]))
+}
+
 benchmark_results <- data.frame(
 #mse_nj = mse_fun(loc_init,tree_init),
 #mse_lm_majority = mse_fun(loc_lm_majority,tree_lm_majority),
@@ -366,13 +388,13 @@ benchmark_results <- data.frame(
 
   rf_nj = rf_fun(tree_init),
   rf_lm_majority = rf_fun(tree_lm_nj),
-
+  
   nye_nj = nye_fun(tree_init),
   nye_lm_Q = nye_fun(tree_lm_nj),
-
+  
   ancestor_accuracy_nj = anc_fun(tree_init),
   ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
-
+  
   path_length_corr_nj = path_corr_fun(tree_init),
   path_length_corr_lm_Q = path_corr_fun(tree_lm_nj),
   
@@ -385,7 +407,7 @@ benchmark_results <- data.frame(
   #spatio_topological_consistency_nj = stc_nj,
   #spatio_topological_consistency_lm_majority = stc_lm_majority,
   #spatio_topological_consistency_lm_Q = stc_lm_nj
-  
+
 )
 ```
 
@@ -393,6 +415,7 @@ benchmark_results <- data.frame(
 res_lm_nj <- LikelihoodCal_ST_OU(tree_lm_nj, data_sequence, df_spatial_continuous$state,
                                 phyla, loc_data,lambda1 = 0.05, lambda2 = 0.1, alpha = 1,estimate_ou_params = TRUE)
 loc_lm_nj <- res_lm_nj$loc_data
+#loc_lm_ou$id <- loc_lm_nj$id
 cs_lm_nj <- res_lm_nj$cell_state_infer
 
 merge_2_trees <- function(subtree1,subtree2){
@@ -482,6 +505,46 @@ make_ultrametric <- function(tree) {
   }
   tree
 }
+
+get_root_to_leaf_paths <- function(tree) {
+  # tree$edge is a matrix of parent-child relationships
+  edges <- tree$edge
+  
+  # Identify the root node
+  root <- setdiff(edges[, 1], edges[, 2])
+  if (length(root) != 1) {
+    stop("The tree must have a single root.")
+  }
+  root <- root[1]
+  
+  # Identify leaf nodes (tips)
+  leaves <- setdiff(edges[, 2], edges[, 1])
+  
+  # Recursive helper function to find all paths
+  find_paths <- function(current_node, current_path) {
+    # Find children of the current node
+    children <- edges[edges[, 1] == current_node, 2]
+    
+    # If no children → it's a leaf, return the completed path
+    if (length(children) == 0) {
+      return(list(current_path))
+    }
+    
+    # Otherwise, recursively continue down each child
+    paths <- lapply(children, function(child) {
+      find_paths(child, c(current_path, child))
+    })
+    
+    # Flatten nested list
+    do.call(c, paths)
+  }
+  
+  # Start recursion from the root
+  paths <- find_paths(root, c(root))
+  
+  # Return as list of integer vectors
+  return(paths)
+}
 ```
 
 ```{r}
@@ -491,10 +554,18 @@ library(RColorBrewer)
 tree_ultra <- reroot_tree(tree_lm_nj)
 tree_ultra <- make_ultrametric(tree_ultra)
 tree_ultra$edge.length <- rep(1,length(tree_ultra$edge.length))
+state_lineages <- list(c(1,4,5))
 res_lm_nj <- LikelihoodCal_ST(tree_ultra, data_sequence, df_spatial_continuous$state,
-                                phyla, loc_data,lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+                                state_lineages, loc_data,lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
 loc_lm_nj <- res_lm_nj$loc_data
+res_lm_nj <- LikelihoodCal_ST_OU(tree_ultra, data_sequence, df_spatial_continuous$state,
+                                state_lineages, loc_data,lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+loc_lm_ou<- res_lm_nj$loc_data
+loc_lm_ou$id <- loc_lm_nj$id
 cs_lm_nj <- res_lm_nj$cell_state_infer
+loc_lm_ou$state <- cs_lm_nj
+
+
 
 root_node <- Ntip(tree_ultra) + 1
 depths <- node.depth.edgelength(tree_ultra)
@@ -663,6 +734,207 @@ p <- ggplot() +
 p
 ```
 ```{r}
+loc_df <- loc_data_2 %>%
+  mutate(
+    node = as.numeric(rownames(loc_data_2)),
+         state = loc_data_2$cell_state)
+
+
+# Define a color palette for states
+colors <- c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
+            "#ff7f00", "#ffff33", "#a65628", "#f781bf", "#999999")
+state_levels <- sort(unique(cs_lm_nj))
+colors <- setNames(palette_colors[1:num_states], sort(unique(df_nodes$state)))
+
+# Plot
+p <- ggplot() +
+  # Edges (light gray dashed)
+  # Nodes (colored by cell state)
+  geom_point(data = loc_df,
+             aes(x = x_pos, y = y_pos, color = factor(state)),
+      size = 4, stroke = 0.4, alpha = 0.9) +
+  scale_color_manual(values = colors, name = "Cell state") +
+  theme_minimal(base_size = 14) +
+  coord_fixed() +
+  labs(x = "x coordinate", y = "y coordinate",
+       title = "2D Spatial Visualization of Lineage Tree") +
+  theme(
+    panel.grid = element_blank(),
+    axis.ticks = element_blank(),
+    legend.position = "right"
+  )
+p+
+
+  # Publication-ready theme
+  theme_minimal(base_family = "Helvetica", base_size = 16) +
+  theme(
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 14, color = "black"),
+    axis.ticks = element_line(size = 0.6, color = "black"),
+    axis.ticks.length = unit(0.15, "cm"),
+    legend.title = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 13),
+    legend.key.size = unit(0.8, "cm"),
+    panel.grid = element_blank(),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "right"
+  )
+```
+
+```{r}
+leaf_nodes <- setdiff(edge_coords$child, edge_coords$parent)
+loc_df <- loc_df %>%
+  mutate(node_type = ifelse(node %in% leaf_nodes, "Leaf", "Internal"))
+
+# Plot
+p <- ggplot() +
+  # Edges (light gray dashed)
+  #geom_segment(
+  #  data = edge_coords,
+  #  aes(x = x_parent, y = y_parent, xend = x_child, yend = y_child),
+  #  color = "gray70", linetype = "dashed",
+  #  linewidth = 0.4, alpha = 0.8
+  #) +
+
+  # Nodes (leaf vs internal with different shapes)
+  geom_point(
+    data = loc_df,
+    aes(
+      x = x, y = y,
+      color = factor(state),
+      shape = node_type
+    ),
+    size = 4, stroke = 0.4, alpha = 0.9
+  ) +
+
+  # Manual color & shape scales
+  scale_color_manual(values = colors, name = "Cell state") +
+  scale_shape_manual(
+    values = c("Internal" = 17, "Leaf" = 16),
+    name = "Node type"
+  ) +
+
+  # Coordinate scaling
+  coord_fixed() +
+
+  # Labels
+  labs(
+    x = "x coordinate",
+    y = "y coordinate",
+    title = "2D Spatial Visualization of Lineage Tree"
+  ) +
+
+  # Publication-ready theme
+  theme_minimal(base_family = "Helvetica", base_size = 16) +
+  theme(
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 14, color = "black"),
+    axis.ticks = element_line(size = 0.6, color = "black"),
+    axis.ticks.length = unit(0.15, "cm"),
+    legend.title = element_text(size = 15, face = "bold"),
+    legend.text = element_text(size = 13),
+    legend.key.size = unit(0.8, "cm"),
+    panel.grid = element_blank(),
+    plot.margin = margin(10, 10, 10, 10),
+    legend.position = "right"
+  )
+```
+
+
+```{r}
+library(MASS)
+library(ggplot2)
+library(dplyr)
+library(ggnewscale)  # to overlay multiple color scales if needed
+library(viridis)
+
+# Example: assume df_nodes and edges_coords from your existing 3D plot
+# df_nodes has columns: node, x, y, z, state
+# edges_coords has columns: x_parent, y_parent, x_child, y_child
+
+densities <- lapply(split(df_nodes, df_nodes$state), function(subdf) {
+  kde <- kde2d(subdf$x, subdf$y, n = 2000)
+  df_kde <- with(kde, expand.grid(x = x, y = y))
+  df_kde$z <- as.vector(kde$z)
+  df_kde$state <- unique(subdf$state)
+  df_kde
+})
+density_df <- do.call(rbind, densities)
+
+# 2️⃣ Normalize densities (for consistent contour scaling)
+density_df <- density_df %>%
+  group_by(state) %>%
+  mutate(z_norm = z / max(z)) %>%
+  ungroup()
+
+# 3️⃣ Define colors for states (reuse your current ones)
+state_colors <- c("1" = "#E41A1C", "4" = "#377EB8", "5" = "#4DAF4A")
+
+# 4️⃣ Base scatterplot (your existing cell positions and arrows)
+p <- ggplot() +
+  # Edges (cell division directions)
+  geom_segment(
+    data = edge_coords,
+    aes(x = x_parent, y = y_parent, xend = x_child, yend = y_child),
+    color = "gray70", linetype = "dashed", linewidth = 0.5, alpha = 0.7,
+    arrow = arrow(length = unit(0.25, "cm"), type = "closed", angle = 20)
+  ) +
+
+  # Density boundaries (contours)
+  geom_contour(
+    data = density_df,
+    aes(x = x, y = y, z = z_norm, color = factor(state)),
+    bins = 4, linewidth = 1.2, alpha = 0.8
+  ) +
+
+  # Optional: softly filled backgrounds for better visibility
+  #geom_contour_filled(
+  #  data = density_df,
+  #  aes(x = x, y = y, z = z_norm, fill = factor(state)),
+  #  alpha = 0.25, bins = 5
+  #) +
+
+  # Cell positions
+  geom_point(
+    data = df_nodes, aes(x = x, y = y, color = factor(state)),
+    size = 2.8, stroke = 0.4, alpha = 0.9
+  ) +
+
+  # --- Scales and legend ---
+  scale_color_manual(values = state_colors, name = "Cell state") +
+  scale_fill_manual(values = state_colors, name = "Cell state") +
+  coord_fixed() +
+
+  # --- Labels ---
+  labs(
+    title = "2D Spatial Map of Lineage Tree with Cell Type Boundaries",
+    x = "Spatial X coordinate",
+    y = "Spatial Y coordinate"
+  ) +
+
+  # --- Theme: publication-quality tweaks ---
+  theme_minimal(base_family = "Helvetica", base_size = 18) +
+  theme(
+    plot.title = element_text(size = 20, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 18, face = "bold"),
+    axis.text = element_text(size = 16, color = "black"),
+    axis.ticks = element_line(size = 0.8, color = "black"),
+    axis.ticks.length = unit(0.2, "cm"),
+    legend.position = c(0.92, 0.8),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 14),
+    legend.background = element_rect(fill = "white", color = "gray80"),
+    panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+    panel.grid.minor = element_blank(),
+    plot.margin = margin(15, 15, 15, 15)
+  )
+```
+
+
+
+```{r}
 library(gt)
 benchmark_results_table <- data.frame(
   Metric = c("RF distance",
@@ -706,6 +978,119 @@ benchmark_results_table %>%
 #      caption = "Comparison of NJ and LM-Q tree reconstruction metrics")
 
 ```
+
+
+```{r}
+
+LineageMap_run_all <- function(colony = c("2","4","5")){
+  benchmark_results_all <- c()
+  for (colony_id in colony){
+    tree_gt <- read.tree(paste0("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/BEAST_analysis/Trial4/tree",colony_id, "_id.newick"))
+    tree_gt$edge.length <- rep(1,length(tree_c2_id$edge.length))
+    
+    loc_data <- read.table(paste0("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/loc_data_",colony_id,".csv"),
+                         sep = " ", header = TRUE)
+    
+    data_sequence <- read.sequence(paste0("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/all_position_barcodes/p",colony_id,"_barcs.nexus"))
+    # Sort by 'node'
+    sequenced_cells <- as.numeric(rownames(data_sequence))
+    loc_data <- arrange(loc_data,node)
+    loc_data <- loc_data[loc_data$node %in% sequenced_cells,]
+    
+    state_lineages <- list(c(1,4,5),c(1,2,3),c(2,3,4,5))
+    loc_data <- loc_data%>%dplyr::select(node,x_pos,y_pos,cell_state)
+    rownames(loc_data) <- 1:nrow(loc_data)
+    colnames(loc_data) <- c("cellid","x","y","state")
+    data_sequence[data_sequence == "?"] <- "-"
+    #df_spatial_continuous <- data.frame(cellid = paste0("cell_",expr_sub$cellID),x = loc_data$x,y = loc_data$y,state = loc_data_2$cell_state)
+    tree_lm_nj <- Build_LineageMap_pd(data_sequence, loc_data, state_lineages,
+                                           threshold = 0.2, backbone_type = "NJ_median",outer_cores = 12,inner_cores = 5,lambda1 = 0.05,lambda2 = 0.1,alpha = 1)
+    
+    tree_ultra <- reroot_tree(tree_lm_nj)
+    tree_ultra <- make_ultrametric(tree_ultra)
+    tree_ultra$edge.length <- rep(1,length(tree_ultra$edge.length))
+    #state_lineages <- list(c(1,4,5))
+    res_lm_nj <- LikelihoodCal_ST(tree_ultra, data_sequence, loc_data$state,
+                                    state_lineages, loc_data %>% dplyr::select(x,y),lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+    loc_lm_nj <- res_lm_nj$loc_data
+    res_lm_nj <- LikelihoodCal_ST_OU(tree_ultra, data_sequence, loc_data$state,
+                                    state_lineages, loc_data %>% dplyr::select(x,y),lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+    loc_lm_ou<- res_lm_nj$loc_data
+    loc_lm_ou$id <- loc_lm_nj$id
+    cs_lm_nj <- res_lm_nj$cell_state_infer
+    loc_lm_ou$state <- cs_lm_nj
+    
+    #tree_gt <- tree_c2_id
+    tree_init <- NJ_from_barcode(data_sequence)
+    
+    loc_gt <- loc_data
+    cds_nj <- chronological_divergence_score(tree_gt, tree_init)
+    cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
+    
+    #calculate spatial topological consistency
+    #stc_nj <- spatio_topological_consistency(tree_gt, tree_init, loc_data, loc_gt)
+    #stc_lm_majority <- spatio_topological_consistency(tree_gt, tree_lm_majority, loc_data, loc_gt)
+    #stc_lm_nj <- spatio_topological_consistency(tree_gt, tree_lm_nj, loc_data, loc_gt)
+    
+    #calculate generation aware divergence
+    gad_nj <- generation_aware_divergence(tree_gt, tree_init)
+    gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
+    
+    rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
+    nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
+    anc_fun <- function(t) {
+      tips <- tree_gt$tip.label
+      correct <- 0; total <- 0
+      for (tip in tips) {
+        anc_true <- Ancestors(tree_gt, tip, type = "all")
+        anc_infer <- Ancestors(t, tip, type = "all")
+        total <- total + length(anc_true)
+        correct <- correct + sum(anc_true %in% anc_infer)
+      }
+      correct / total
+    }
+    path_corr_fun <- function(t) {
+      common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
+      cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
+          as.vector(cophenetic(t)[common_tips, common_tips]))
+    }
+    
+    benchmark_results_all <- rbind(benchmark_results_all,data.frame(
+    #mse_nj = mse_fun(loc_init,tree_init),
+    #mse_lm_majority = mse_fun(loc_lm_majority,tree_lm_majority),
+    #mse_lm_Q = mse_fun(loc_lm_nj,tree_lm_nj),
+    
+      rf_nj = rf_fun(tree_init),
+      rf_lm_majority = rf_fun(tree_lm_nj),
+      
+      nye_nj = nye_fun(tree_init),
+      nye_lm_Q = nye_fun(tree_lm_nj),
+      
+      ancestor_accuracy_nj = anc_fun(tree_init),
+      ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
+      
+      path_length_corr_nj = path_corr_fun(tree_init),
+      path_length_corr_lm_Q = path_corr_fun(tree_lm_nj),
+      
+      chronological_divergence_score_nj = cds_nj,
+      chronological_divergence_score_lm_Q = cds_lm_nj,
+      
+      generation_aware_divergence_nj = gad_nj$mean_error,
+      generation_aware_divergence_lm_Q = gad_lm_nj$mean_error,
+      
+      colony = colony_id
+      
+      #spatio_topological_consistency_nj = stc_nj,
+      #spatio_topological_consistency_lm_majority = stc_lm_majority,
+      #spatio_topological_consistency_lm_Q = stc_lm_nj
+    
+    ))
+  }
+  benchmark_results_all
+}
+LineageMap_run_all()
+```
+
 
 
 

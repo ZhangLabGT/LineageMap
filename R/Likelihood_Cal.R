@@ -60,8 +60,9 @@ LikelihoodCal_ST_OU <- function(tree, muts, cell_state_labels, state_lineages, l
     ## --- MESSAGE PASSING: states ---
     cell_state_children <- cell_state_labels[children]
     state_parent <- "0"
-
+    #browser()
     for (lineage in state_lineages) {
+      #print(lineage)
       idx1 <- match(cell_state_children[1], lineage)
       idx2 <- match(cell_state_children[2], lineage)
       if (is.na(idx1) || is.na(idx2)) next

@@ -124,7 +124,7 @@ SubgroupTree <- function(X, groups,dmat = NULL) {
   Treenj <- nj(dist_h)
   tree_backbone <- multi2di(Treenj)
   tree_backbone$tip.label <- dt$group_name
-  tree_backbone$edge.length <- rep(1, length(tree_backbone$edge.length))
+  #tree_backbone$edge.length <- rep(1, length(tree_backbone$edge.length))
   return(list(tree_backbone = tree_backbone, backbone_meta = dt))
 }
 
@@ -186,7 +186,7 @@ SubgroupTree_NJ <- function(X, groups, dropout = "-", w_mut = 1, w_ref = 0.5, su
   # Perform NJ on merged nodes
   Treenj <- nj(dist_h)
   Treenj <- multi2di(Treenj)
-  Treenj$edge.length <- rep(1, length(Treenj$edge.length))
+  #reenj$edge.length <- rep(1, length(Treenj$edge.length))
   Treenj$tip.label <- dt$group_name
 
   return(list(tree_backbone = Treenj, backbone_meta = dt))

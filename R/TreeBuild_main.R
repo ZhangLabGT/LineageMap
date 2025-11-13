@@ -160,7 +160,7 @@ Build_LineageMap_parallel <- function(muts, meta, state_lineages,
     if (length(cellids) > 1) {
       res <- FindBestTree(muts_sub, meta_sub, labels = labels_sub,
                           state_lineages, maxIter = max_Iter,
-                          n_chains = inner_cores,,lambda1 = lambda1,lambda2 = lambda2,alpha = alpha)  # pass fewer chains
+                          n_chains = inner_cores,lambda1 = lambda1,lambda2 = lambda2,alpha = alpha)  # pass fewer chains
       res$tip.label <- sub("cell_","",labels[as.numeric(res$tip.label)])
       res$name <- dt$group_name[i]
       return(res)
@@ -217,14 +217,14 @@ Build_LineageMap_pd <- function(muts, meta, state_lineages,
 
   tree_backbone <- returnList[[1]]
   dt <- returnList[[2]]
-
+  #browser()
   # Parallelise across subgroups
   subtree_list <- mclapply(1:nrow(dt), function(i) {
     cellids <- unlist(dt$cells[i])
     muts_sub <- muts[cellids, ]
     meta_sub <- meta[cellids, ]
     labels_sub <- labels[cellids]
-
+    #browser()
     if (length(cellids) > 1) {
       res <- FindBestTree(muts_sub, meta_sub, labels = labels_sub,
                           state_lineages, maxIter = max_Iter,
@@ -260,7 +260,7 @@ run_chain <- function(chain_id, seeds, muts_leaves, df_spatial_continuous, phyla
 
   # Starting tree
   tree <- starting_tree_from_data(muts, loc_data, lambda = lambda_restart)
-  tree$edge.length <- rep(1, length(tree$edge.length))
+  #tree$edge.length <- rep(1, length(tree$edge.length))
   tree_init <- tree
 
   # Initial likelihood evaluation
@@ -398,7 +398,7 @@ starting_tree_from_data <- function(X,loc,lambda = 0.9) {
   # ---- NJ tree ----
   Treenj <- nj(as.dist(dist_combined))
   tree <- multi2di(Treenj)
-  tree$edge.length <- rep(1, length(tree$edge.length))
+  #tree$edge.length <- rep(1, length(tree$edge.length))
 
   return(tree)
 }
