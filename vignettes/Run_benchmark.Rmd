@@ -33,163 +33,578 @@ library("ggtree")
 load_all()
 ```
 
+\
+
 ```{r}
-n_data <- 10
-df_stats <- c()
-seeds <- runif(10000, 1, 99999)
+.libPaths(c("/localscratch/ychen4013/Lineagemap_project/Rlib", .libPaths()))
 
-for (k in 1:n_data) {
-  set.seed(seeds[k])
-  print(sprintf("running test No. %i",k))
-  ncells <- 1024
-  phyla <- read.tree(text='((t1:2, (t2:1, t3:1):1):1);')
-  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
-  N_nodes <- 2*ncells-2
-  ngenes <- 500
-  max_walk <- 6
-  p_a <- 0
-  n_cif <- 30
-  n_diff <- 20
-  cif_step <- 0.25
-  p_d <- 0
-  N_char <- 50
-  
-  #Simulating gene expression data
-  returnlist <- SIFGenerate(phyla,n_diff,step = cif_step)
-  
-  cifs <- SimulateCIFs(ncells,phyla,p_a = p_a,mu = 0.05,n_CIF = n_cif,n_diff = n_diff,step = cif_step,,p_d = p_d, Sigma = 0.5, N_char = N_char, max_walk = max_walk, SIF_res = returnlist, unif_on = FALSE)
-  
-  #We only need the leaf cells for experiments
-  cif_leaves <- lapply(c(1:3),function(parami){
-    cif_leaves_all <- cifs[[1]][[parami]][c(1:ncells),]
-    return(cif_leaves_all)
-  })
-  cif_res <- list(cif_leaves,cifs[[2]])
-  states <- cifs[[2]]
-  states <- states[1:N_nodes,]
-  states_leaves <- states[1:ncells,]
-  muts <- cifs[[7]]
-  muts <- drop_characters(muts,drop_rate = 0.2,mode = "row")
-  rownames(muts) <- paste("cell",states[,4],sep = "_")
-  muts_leaves <- muts[1:ncells,]
-  tree <- cifs[[4]]
-  
-  #simulate true counts
-  true_counts_res <- CIF2Truecounts(ngenes = 500,ncif = n_cif,ge_prob = 0.3,ncells = ncells, cif_res = cif_res)
-  #umap_true_counts <- PlotUmap(meta=states_leaves, data=log2(true_counts_res[[1]]+1), n_pc=30, label='cluster', saving = F, plotname="Differentiating population (true counts)")
-  #umap_true_counts[[2]] + ggtitle("Continuous population (true counts)") + xlab("UMAP 1") + ylab("UMAP 2") +  theme(axis.text = element_text(size = 20), axis.title = element_text(size = 30),legend.text = element_text(size = 20))
-  
-  #counts <- t(true_counts_res[[1]])
-  #rownames(counts) <- rownames(muts_leaves)
-  
-  
-  cell_types <- c(states[1:ncells,2],5,states[(ncells+1):(2*ncells-2),2])
-  returnlist <- Simulate_Spatial_continuous(ncells,log2(ncells),tree,sigma = 0.6,division_radius = 6,cell_type = cell_types,migration_rate = c(0,0),migration_radius = 6,mode = "indivisive",min_distance = 0,max_distance = 6,xlim=c(-6,6),ylim=c(-6,6))
-  df_spatial_continuous <- returnlist[[1]]
-  df_combined <- rbind(returnlist[[1]])
-  for (i in 1:(length(returnlist[[2]])-1)){
-    df_combined <- rbind(df_combined,returnlist[[2]][[i]])
+# Unset LD_LIBRARY_PATH to avoid conda library conflicts with R
+Sys.setenv(LD_LIBRARY_PATH = "")
+
+# Install missing packages if needed
+required_packages <- c("lattice", "parallel", "data.table", "igraph", "castor", 
+                       "dplyr", "tidyr", "ape", "phangorn", "TreeDist", "TreeTools")
+for (pkg in required_packages) {
+  if (!require(pkg, character.only = TRUE, quietly = TRUE)) {
+    cat(sprintf("Installing missing package: %s\n", pkg))
+    install.packages(pkg, lib = "/localscratch/ychen4013/Lineagemap_project/Rlib", repos = "https://cloud.r-project.org")
   }
-  
-  tree_init <- NJ_from_barcode(muts_leaves)
-  result_init <- LikelihoodCal_ST(tree_init, muts_leaves, df_spatial_continuous$state, phyla, loc_data,
-  lambda1 = 0, lambda2 = 0.1, alpha = 1)
-  loc_init <- result_init$loc_data
-  order <- sample(nrow(muts_leaves))
-  df_spatial_continuous <- df_spatial_continuous[order,]
-  muts_leaves <- muts_leaves[order,]
-  
-
-  # LineageMap (mode = "majority")
-  tree_lm_majority <- Build_LineageMap(muts_leaves, df_spatial_continuous, phyla,
-                                       threshold = 2/N_char, backbone_type = "majority")
-  res_lm_majority <- LikelihoodCal_ST(tree_lm_majority, muts_leaves, df_spatial_continuous$state,
-                                      phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
-  loc_lm_majority <- res_lm_majority$loc_data
-
-  # LineageMap (mode = "NJ_median")
-  tree_lm_nj <- Build_LineageMap(muts_leaves, df_spatial_continuous, phyla,
-                                 threshold = 2/N_char, backbone_type = "NJ_median")
-  res_lm_nj <- LikelihoodCal_ST(tree_lm_nj, muts_leaves, df_spatial_continuous$state,
-                                phyla, loc_data, lambda1 = 0, lambda2 = 0.1, alpha = 1)
-  loc_lm_nj <- res_lm_nj$loc_data
-  
-  # --- Coordinate MSE ---
-  df_benchmark <- df_combined %>% arrange(cellid)
-  gt_x <- c(df_benchmark$x[order], 0, df_benchmark$x[(ncells+1):(2*ncells - 2)])
-  gt_y <- c(df_benchmark$y[order], 0, df_benchmark$y[(ncells+1):(2*ncells - 2)])
-  
-  # Metrics helper
-  mse_fun <- function(loc) mean((loc$x - gt_x)^2) + mean((loc$y - gt_y)^2)
-  rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
-  nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
-  anc_fun <- function(t) {
-    tips <- tree_gt$tip.label
-    correct <- 0; total <- 0
-    for (tip in tips) {
-      anc_true <- Ancestors(tree_gt, tip, type = "all")
-      anc_infer <- Ancestors(t, tip, type = "all")
-      total <- total + length(anc_true)
-      correct <- correct + sum(anc_true %in% anc_infer)
-    }
-    correct / total
-  }
-  path_corr_fun <- function(t) {
-    common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
-    cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
-        as.vector(cophenetic(t)[common_tips, common_tips]))
-  }
-
-  # Compute all metrics
-  benchmark_results <- data.frame(
-    mse_nj = mse_fun(loc_init),
-    mse_lm_majority = mse_fun(loc_lm_majority),
-    mse_lm_nj = mse_fun(loc_lm_nj),
-
-    rf_nj = rf_fun(tree_init),
-    rf_lm_majority = rf_fun(tree_lm_majority),
-    rf_lm_nj = rf_fun(tree_lm_nj),
-
-    nye_nj = nye_fun(tree_init),
-    nye_lm_majority = nye_fun(tree_lm_majority),
-    nye_lm_nj = nye_fun(tree_lm_nj),
-
-    ancestor_accuracy_nj = anc_fun(tree_init),
-    ancestor_accuracy_lm_majority = anc_fun(tree_lm_majority),
-    ancestor_accuracy_lm_nj = anc_fun(tree_lm_nj),
-
-    path_length_corr_nj = path_corr_fun(tree_init),
-    path_length_corr_lm_majority = path_corr_fun(tree_lm_majority),
-    path_length_corr_lm_nj = path_corr_fun(tree_lm_nj)
-  )
-
-  df_stats <- rbind(df_stats, benchmark_results)
 }
-colnames(df_stats) <- c("mse_nj","mse_lm_majority","mse_lm_Q","rf_nj","rf_lm_majority","rf_lm_Q","nye_nj","nye_lm_majority","nye_lm_Q","ancestor_accuracy_nj","ancestor_accuracy_lm_majority","ancestor_accuracy_lm_Q","path_length_corr_nj","path_length_corr_lm_majority","path_length_corr_lm_Q")
 
-# Convert to long format
-df_long <- df_stats %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = c("metric", "method"),
-    names_pattern = "(.*)_(nj|lm_majority|lm_Q)",
-    values_to = "value"
-  )
+suppressPackageStartupMessages({
+  library(parallel)    # Required for mclapply (Build_LineageMap_parallel)
+  library(lattice)     # Required by ape
+  library(data.table)  # Required for rbindlist
+  library(dplyr)       # Data manipulation
+  library(tidyr)       # Data tidying
+  library(ape)         # Phylogenetic trees
+  library(phangorn)    # Phylogenetic analysis
+  library(castor)      # Tree operations (used by Build_LineageMap)
+  library(TreeDist)    # Tree distance metrics
+  library(TreeTools)   # Tree manipulation tools (provides Subtree function)
+  library(igraph)      # Graph operations (must load last to avoid masking issues)
+})
 
-# Visualization
-ggplot(df_long, aes(x = method, y = value, fill = method)) +
-  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
-  facet_wrap(~ metric, scales = "free_y") +
-  theme_minimal(base_size = 14) +
-  labs(
-    title = "Performance Comparison: NJ vs LineageMap (Majority & NJ_median)",
-    x = "Method",
-    y = "Metric Value"
-  ) +
-  scale_fill_manual(values = c(
-    "nj" = "skyblue",
-    "lm_majority" = "tomato",
-    "lm_Q" = "palegreen3"
-  ))
+# Load LineageMap package functions
+source("/localscratch/ychen4013/LineageMap/Benchmark/benchmark_scripts/load_lineagemap_functions.R")
+
+# Load helper functions
+source("/localscratch/ychen4013/LineageMap/Benchmark/benchmark_scripts/helper_functions.R")
+
+# Directories (read from environment)
+dataset_dir <- Sys.getenv("DATASET_DIR", "/localscratch/ychen4013/LineageMap/updated_results/Benchmark/simulated_data_test")
+results_base <- Sys.getenv("RESULTS_DIR", "/localscratch/ychen4013/LineageMap/updated_results/Benchmark/results_test")
+benchmark_dir <- Sys.getenv("BENCHMARK_DIR", "/localscratch/ychen4013/LineageMap/updated_results/Benchmark")
+output_file <- file.path(benchmark_dir, "benchmark_results_linrace.csv")
+
+cat("BENCHMARK EVALUATION\n")
+cat(sprintf("Dataset directory: %s\n", dataset_dir))
+cat(sprintf("Results directory: %s\n", results_base))
+cat(sprintf("Output file: %s\n\n", output_file))
+
+# Get all simulation directories
+sim_dirs <- list.dirs(dataset_dir, recursive = FALSE, full.names = TRUE)
+sim_dirs <- sim_dirs[grepl("cells.*_chars.*_drop.*_rep", basename(sim_dirs))]
+
+# Filter if requested
+sim_filter <- Sys.getenv("SIM_FILTER", "")
+if (sim_filter != "") {
+  cat(sprintf("Filtering simulations by pattern: %s\n", sim_filter))
+  sim_dirs <- sim_dirs[grepl(sim_filter, basename(sim_dirs))]
+}
+
+# If no simulations found after filtering, try without filter or warn
+if (length(sim_dirs) == 0) {
+  cat("! No simulations found matching the filter. Checking all simulations...\n")
+  sim_dirs <- list.dirs(dataset_dir, recursive = FALSE, full.names = TRUE)
+  sim_dirs <- sim_dirs[grepl("cells.*_chars.*_drop.*_rep", basename(sim_dirs))]
+}
+
+total <- length(sim_dirs)
+current <- 0
+
+# Initialize results dataframe
+all_results <- data.frame()
+
+# Keep track of which simulations have been processed
+processed_sims <- c()
+
+for (sim_dir in sim_dirs) {
+  current <- current + 1
+  sim_name <- basename(sim_dir)
+  
+  # Folder names are now descriptive: cells128_chars128_drop0.2_rep1
+  
+  cat(sprintf("[%d/%d] Evaluating: %s\n", current, total, sim_name))
+  
+  tryCatch({
+    # Load simulation RDS bundle
+    r_data_file <- file.path(sim_dir, "r_data", "simulation_data.rds")
+    if (!file.exists(r_data_file)) {
+      warning(sprintf("Data file not found for %s, skipping...", sim_name))
+      next
+    }
+    sim_data <- readRDS(r_data_file)
+    muts_leaves <- sim_data$muts_leaves
+    df_spatial_continuous <- sim_data$df_spatial_continuous
+    states <- sim_data$states
+    tree_gt <- sim_data$tree_gt
+    
+    df_combined <- sim_data$df_combined
+    phyla <- sim_data$phyla
+    
+    muts_leaves[muts_leaves == -1] <- "-"
+
+    # Extract parameters from RDS or use defaults
+    if (!is.null(sim_data$params)) {
+      ncells <- sim_data$params$ncells
+      N_char <- sim_data$params$N_char
+      drop_rate <- sim_data$params$drop_rate
+      set_name <- sim_data$params$set_name
+    } else {
+      ncells <- nrow(muts_leaves)
+      N_char <- ncol(muts_leaves)
+      drop_rate <- NA_real_
+      set_name <- "unknown"
+    }
+
+    cat(sprintf("  Parameters: cells=%d, chars=%d, dropout=%.1f (%s)\n", 
+                ncells, N_char, drop_rate, set_name))
+
+    # R-based methods
+    loc_data <- df_spatial_continuous %>% dplyr::select(x, y)
+
+    # NJ baseline
+    cat("  → Running NJ baseline...\n")
+    
+    # Debug: Check what rownames look like
+    cat(sprintf("    muts_leaves rownames sample: %s\n", paste(head(rownames(muts_leaves), 5), collapse=", ")))
+    cat(sprintf("    tree_gt tip labels sample: %s\n", paste(head(tree_gt$tip.label, 5), collapse=", ")))
+    
+    time_nj <- system.time({
+      tree_init <- NJ_from_barcode(muts_leaves)
+      if (is.null(tree_init$edge.length) || length(tree_init$edge.length) == 0) {
+        tree_init$edge.length <- rep(1, nrow(tree_init$edge))
+      } else {
+        tree_init$edge.length <- rep(1, length(tree_init$edge.length))
+      }
+    })["elapsed"]
+    cat(sprintf("    Time: %.2f seconds\n", time_nj))
+    
+    # Save NJ tree and timing
+    nj_out_dir <- file.path(results_base, "nj", sim_name)
+    dir.create(nj_out_dir, recursive = TRUE, showWarnings = FALSE)
+    #write.tree(tree_init, file.path(nj_out_dir, "tree.newick"))
+    #writeLines(as.character(time_nj), file.path(nj_out_dir, "timing.txt"))
+    cat(sprintf("    Saved to: %s\n", nj_out_dir))
+    
+    # Debug NJ tree
+    cat(sprintf("    NJ tree info: %d tips, %d nodes\n", length(tree_init$tip.label), tree_init$Nnode))
+    cat(sprintf("    Ground truth tree: %d tips, %d nodes\n", length(tree_gt$tip.label), tree_gt$Nnode))
+    cat(sprintf("    NJ tip labels sample: %s\n", paste(head(tree_init$tip.label, 5), collapse=", ")))
+    cat(sprintf("    Tip label match: %d/%d\n", 
+                sum(tree_init$tip.label %in% tree_gt$tip.label), 
+                length(tree_init$tip.label)))
+
+    # LineageMap (NJ_median only)
+    cat("  → Running LineageMap (NJ_median)...\n")
+    
+    # Dynamic threshold tuning based on dropout rate
+    if (drop_rate == 0) {
+     threshold_val <- 0  # No dropout: no clustering needed
+     cat(sprintf("    Using threshold=0 (no dropout, no clustering)\n"))
+    } else {
+     threshold_val <- NULL  # Use Otsu dynamic thresholding
+     cat(sprintf("    Using dynamic threshold (Otsu method)\n"))
+    }
+
+    # time_lm_nj <- system.time({
+    tree_lm_nj <- tryCatch({
+    # LineageMap expects cell labels WITH "cell_" prefix - don't preprocess
+    result_tree <- Build_LineageMap_parallel(muts_leaves, df_spatial_continuous, state_lineages = phyla,
+                                backbone_type = "NJ_median", max_Iter = 300,
+                                threshold = threshold_val)
+   
+    # Check if result is valid
+    if (is.null(result_tree) || !is.list(result_tree)) {
+          cat(sprintf("    ! LineageMap returned invalid object of type: %s\n", typeof(result_tree)))
+          stop("LineageMap failed to return a valid tree")
+    }
+  
+  
+    cat(sprintf("    Raw LM tip labels sample: %s\n",    paste(head(result_tree$tip.label, 5), collapse=", ")))
+  
+    if (length(result_tree$tip.label) > 0) {
+      clean_labels <- gsub("^cell_", "", result_tree$tip.label)
+      result_tree$tip.label <- paste0("cell_", clean_labels)
+  
+      cat(sprintf("    Fixed LM tip labels sample: %s\n", paste(head(result_tree$tip.label, 5), collapse=", ")))
+    }
+  
+    # Normalize edge lengths: set to 1 if missing or NULL
+    if (is.null(result_tree$edge.length) || length(result_tree$edge.length) == 0) {
+       result_tree$edge.length <- rep(1, nrow(result_tree$edge))
+    } else {
+       result_tree$edge.length <- rep(1, length(result_tree$edge.length))
+    }
+     result_tree
+    }, error = function(e) {
+      cat(sprintf("    ! Error: %s\n", e$message))
+      cat("    Using NJ fallback\n")
+      tree_init
+    })
+   })["elapsed"]
+   cat(sprintf("    Time: %.2f seconds\n", time_lm_nj))
+  
+   # Save LineageMap tree and timing
+   lm_out_dir <- file.path(results_base, "lineagemap", sim_name)
+   dir.create(lm_out_dir, recursive = TRUE, showWarnings = FALSE)
+   #write.tree(tree_lm_nj, file.path(lm_out_dir, "tree.newick"))
+   #writeLines(as.character(time_lm_nj), file.path(lm_out_dir, "timing.txt"))
+   cat(sprintf("    Saved to: %s\n", lm_out_dir))
+  
+   # Debug LineageMap tree
+   if (!is.null(tree_lm_nj)) {
+    cat(sprintf("    LineageMap tree: %d tips, %d nodes\n", length(tree_lm_nj$tip.label), tree_lm_nj$Nnode))
+    cat(sprintf("    LineageMap tip labels sample: %s\n", paste(head(tree_lm_nj$tip.label, 5), collapse=", ")))
+    cat(sprintf("    LineageMap vs GT match: %d/%d\n",
+             sum(tree_lm_nj$tip.label %in% tree_gt$tip.label),
+             length(tree_lm_nj$tip.label)))
+   }
+    cat("  → Running LinRace...\n")
+
+    time_linrace <- system.time({
+      tree_linrace <- tryCatch({
+        run_linrace(
+          muts_leaves = muts_leaves,
+          df_meta     = states[1:ncells,],   # or df_spatial_continuous if cluster info there
+          phyla       = phyla
+        )
+      }, error = function(e) {
+        cat(sprintf("    ! LinRace error: %s\n", e$message))
+        NULL
+      })
+    })["elapsed"]
+    
+    # Save LinRace output
+    lr_out_dir <- file.path(results_base, "linrace", sim_name)
+    dir.create(lr_out_dir, recursive = TRUE, showWarnings = FALSE)
+    if (!is.null(tree_linrace))
+      write.tree(tree_linrace, file.path(lr_out_dir, "tree.newick"))
+      writeLines(as.character(time_linrace), file.path(lr_out_dir, "timing.txt"))
+    cat(sprintf("    Saved to: %s\n", lr_out_dir))
+    
+
+    # External tools
+    cat("  → Loading external results...\n")
+    cassiopeia_trees <- read_cassiopeia_results(sim_dir, results_base_dir = results_base)
+    startle_tree <- read_startle_results(sim_dir, results_base_dir = results_base)
+
+    # Normalize edge lengths for external tools
+    if (!is.null(cassiopeia_trees$nj)) {
+     if (is.null(cassiopeia_trees$nj$edge.length) || length(cassiopeia_trees$nj$edge.length) == 0) {
+       cassiopeia_trees$nj$edge.length <- rep(1, nrow(cassiopeia_trees$nj$edge))
+     } else {
+       cassiopeia_trees$nj$edge.length <- rep(1, length(cassiopeia_trees$nj$edge.length))
+     }
+    }
+    if (!is.null(cassiopeia_trees$vanilla)) {
+     if (is.null(cassiopeia_trees$vanilla$edge.length) || length(cassiopeia_trees$vanilla$edge.length) == 0) {
+       cassiopeia_trees$vanilla$edge.length <- rep(1, nrow(cassiopeia_trees$vanilla$edge))
+     } else {
+       cassiopeia_trees$vanilla$edge.length <- rep(1, length(cassiopeia_trees$vanilla$edge.length))
+     }
+    }
+    if (!is.null(startle_tree)) {
+     if (is.null(startle_tree$edge.length) || length(startle_tree$edge.length) == 0) {
+       startle_tree$edge.length <- rep(1, nrow(startle_tree$edge))
+     } else {
+       startle_tree$edge.length <- rep(1, length(startle_tree$edge.length))
+     }
+    }
+
+    ## Read timing data for external tools
+    time_cassiopeia_nj <- NA_real_
+    time_cassiopeia_vanilla <- NA_real_
+    time_startle <- NA_real_
+
+    #cassiopeia_time_file <- file.path(results_base, "cassiopeia", sim_name, "timing.txt")
+    if (file.exists(cassiopeia_time_file)) {
+     timing_data <- read.table(cassiopeia_time_file, header = TRUE, stringsAsFactors = FALSE)
+     if ("nj" %in% timing_data$method) time_cassiopeia_nj <- timing_data$time[timing_data$method == "nj"]
+     if ("vanilla" %in% timing_data$method) time_cassiopeia_vanilla <- timing_data$time[timing_data$method == "vanilla"]
+    }
+
+    #startle_time_file <- file.path(results_base, "startle", sim_name, "timing.txt")
+    if (file.exists(startle_time_file)) {
+     time_startle <- as.numeric(readLines(startle_time_file)[1])
+    }
+
+    # Metrics helpers
+    rf_fun <- function(t, name = "") {
+      if (is.null(t)) return(NA)
+      tryCatch({
+        # Debug: Check tip label overlap
+        common_tips <- intersect(tree_gt$tip.label, t$tip.label)
+        gt_only <- setdiff(tree_gt$tip.label, t$tip.label)
+        t_only <- setdiff(t$tip.label, tree_gt$tip.label)
+        
+        if (length(common_tips) == 0) {
+          cat(sprintf("    ! RF %s: NO common tip labels!\n", name))
+          cat(sprintf("      GT tips sample: %s\n", paste(head(tree_gt$tip.label, 3), collapse=", ")))
+          cat(sprintf("      %s tips sample: %s\n", name, paste(head(t$tip.label, 3), collapse=", ")))
+          return(NA)
+        }
+        
+        if (length(gt_only) > 0 || length(t_only) > 0) {
+          cat(sprintf("    ! RF %s: Tip label mismatch! Common=%d, GT_only=%d, %s_only=%d\n", 
+                      name, length(common_tips), length(gt_only), name, length(t_only)))
+          if (length(gt_only) > 0) cat(sprintf("      GT only (sample): %s\n", paste(head(gt_only, 3), collapse=", ")))
+          if (length(t_only) > 0) cat(sprintf("      %s only (sample): %s\n", name, paste(head(t_only, 3), collapse=", ")))
+          # Prune both trees to common tips before comparison
+          tree_gt_pruned <- keep.tip(tree_gt, common_tips)
+          t_pruned <- keep.tip(t, common_tips)
+        } else {
+          tree_gt_pruned <- tree_gt
+          t_pruned <- t
+        }
+        
+        # CRITICAL: Unroot both trees before comparison
+        tree_gt_unroot <- unroot(multi2di(tree_gt_pruned))
+        t_unroot <- unroot(multi2di(t_pruned))
+        RF.dist(tree_gt_unroot, t_unroot, normalize = TRUE)
+      }, error = function(e) {
+        cat(sprintf("    ! RF metric error for %s: %s\n", name, e$message))
+        NA
+      })
+    }
+    rf_nj <- rf_fun(tree_init, "NJ")
+    cat(sprintf("RF distance of the NJ tree: %f\n",rf_nj))
+    
+    nye_fun <- function(t, name = "") {
+      if (is.null(t)) return(NA)
+      tryCatch({
+        NyeSimilarity(tree_gt, t, normalize = TRUE)
+      }, error = function(e) {
+        cat(sprintf("    ! Nye metric error for %s: %s\n", name, e$message))
+        NA
+      })
+    }
+    
+    anc_fun <- function(t, name = "") {
+      if (is.null(t)) return(NA)
+      tryCatch({
+        tips <- intersect(tree_gt$tip.label, t$tip.label)
+        if (length(tips) == 0) {
+          cat(sprintf("    ! No common tip labels for %s\n", name))
+          return(NA)
+        }
+        correct <- 0; total <- 0
+        for (tip in tips) {
+          anc_true <- Ancestors(tree_gt, tip, type = "all")
+          anc_infer <- Ancestors(t, tip, type = "all")
+          total <- total + length(anc_true)
+          correct <- correct + sum(anc_true %in% anc_infer)
+        }
+        correct / total
+      }, error = function(e) {
+        cat(sprintf("    ! Ancestor metric error for %s: %s\n", name, e$message))
+        NA
+      })
+    }
+    
+    path_corr_fun <- function(t, name = "") {
+      if (is.null(t)) return(NA)
+      tryCatch({
+        common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
+        if (length(common_tips) < 2) {
+          cat(sprintf("    ! Insufficient common tips for path correlation (%s): %d\n", name, length(common_tips)))
+          return(NA)
+        }
+        cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
+            as.vector(cophenetic(t)[common_tips, common_tips]))
+      }, error = function(e) {
+        cat(sprintf("    ! Path correlation error for %s: %s\n", name, e$message))
+        NA
+      })
+    }
+    
+    avg_neighbor_tree_dist_fun <- function(t, name = "") {
+      if (is.null(t)) return(NA)
+      tryCatch({
+        loc_coords <- df_spatial_continuous %>% dplyr::select(x, y)
+        
+        # Match to tree tips
+        common_tips <- intersect(t$tip.label, rownames(loc_coords))
+        if (length(common_tips) < 4) {
+          cat(sprintf("    ! Too few common tips for neighbor metric (%s): %d\n", name, length(common_tips)))
+          return(NA)
+        }
+        
+        # Prune tree to common tips
+        t_pruned <- keep.tip(t, common_tips)
+        loc_subset <- loc_coords[common_tips, ]
+        
+        # Compute cophenetic and spatial distances
+        coph_dist <- cophenetic(t_pruned)
+        spatial_dist_mat <- as.matrix(dist(loc_subset))
+        
+        # For each cell, find k=3 nearest spatial neighbors and compute avg tree distance
+        k_neighbors <- min(3, length(common_tips) - 1)
+        tree_distances <- c()
+        
+        for (i in 1:length(common_tips)) {
+          # Find k nearest spatial neighbors (excluding self)
+          spatial_dists_i <- spatial_dist_mat[i, ]
+          nearest_indices <- order(spatial_dists_i)[2:(k_neighbors + 1)]
+          
+          # Get tree distances to these neighbors
+          for (j in nearest_indices) {
+            tree_distances <- c(tree_distances, coph_dist[i, j])
+          }
+        }
+        
+        mean(tree_distances)
+      }, error = function(e) {
+        cat(sprintf("    ! Avg neighbor tree dist error for %s: %s\n", name, e$message))
+        NA
+      })
+    }
+
+    # Collect results row
+    cat("  → Computing metrics...\n")
+    
+    # Extract replicate number from folder name (cells128_chars128_drop0.2_rep1)
+    rep_num <- as.integer(gsub(".*_rep([0-9]+)$", "\\1", sim_name))
+    
+    benchmark_results <- data.frame(
+      sim_name = sim_name,
+      replicate = rep_num,
+      set_name = set_name,
+      ncells = ncells,
+      nchars = N_char,
+      dropout = drop_rate,
+      # Timing metrics (in seconds)
+      time_baseline_nj = time_nj,
+      time_lineagemap_nj = time_lm_nj,
+      time_cassiopeia_nj = time_cassiopeia_nj,
+      time_cassiopeia_vanilla = time_cassiopeia_vanilla,
+      time_startle = time_startle,
+      time_linrace = time_linrace,
+      # Accuracy metrics
+      rf_baseline_nj = rf_fun(tree_init, "NJ"),
+      rf_lineagemap_nj = rf_fun(tree_lm_nj, "LM_NJ"),
+      rf_cassiopeia_nj = rf_fun(cassiopeia_trees$nj, "Cassiopeia_NJ"),
+      rf_cassiopeia_vanilla = rf_fun(cassiopeia_trees$vanilla, "Cassiopeia_vanilla"),
+      rf_startle = rf_fun(startle_tree, "STARTLE"),
+      rf_linrace = rf_fun(tree_linrace, "LinRace"),
+      nye_baseline_nj = nye_fun(tree_init, "NJ"),
+      nye_lineagemap_nj = nye_fun(tree_lm_nj, "LM_NJ"),
+      nye_cassiopeia_nj = nye_fun(cassiopeia_trees$nj, "Cassiopeia_NJ"),
+      nye_cassiopeia_vanilla = nye_fun(cassiopeia_trees$vanilla, "Cassiopeia_vanilla"),
+      nye_startle = nye_fun(startle_tree, "STARTLE"),
+      nye_linrace = nye_fun(tree_linrace, "LinRace"),
+      ancestor_accuracy_baseline_nj = anc_fun(tree_init, "NJ"),
+      ancestor_accuracy_lineagemap_nj = anc_fun(tree_lm_nj, "LM_NJ"),
+      ancestor_accuracy_cassiopeia_nj = anc_fun(cassiopeia_trees$nj, "Cassiopeia_NJ"),
+      ancestor_accuracy_cassiopeia_vanilla = anc_fun(cassiopeia_trees$vanilla, "Cassiopeia_vanilla"),
+      ancestor_accuracy_startle = anc_fun(startle_tree, "STARTLE"),
+      ancestor_accuracy_linrace = anc_fun(tree_linrace, "LinRace"),
+      path_length_corr_baseline_nj = path_corr_fun(tree_init, "NJ"),
+      path_length_corr_lineagemap_nj = path_corr_fun(tree_lm_nj, "LM_NJ"),
+      path_length_corr_cassiopeia_nj = path_corr_fun(cassiopeia_trees$nj, "Cassiopeia_NJ"),
+      path_length_corr_cassiopeia_vanilla = path_corr_fun(cassiopeia_trees$vanilla, "Cassiopeia_vanilla"),
+      path_length_corr_startle = path_corr_fun(startle_tree, "STARTLE"),
+      path_length_corr_linrace = path_corr_fun(tree_linrace, "LinRace"),
+      avg_neighbor_tree_dist_baseline_nj = avg_neighbor_tree_dist_fun(tree_init, "NJ"),
+      avg_neighbor_tree_dist_lineagemap_nj = avg_neighbor_tree_dist_fun(tree_lm_nj, "LM_NJ"),
+      avg_neighbor_tree_dist_cassiopeia_nj = avg_neighbor_tree_dist_fun(cassiopeia_trees$nj, "Cassiopeia_NJ"),
+      avg_neighbor_tree_dist_cassiopeia_vanilla = avg_neighbor_tree_dist_fun(cassiopeia_trees$vanilla, "Cassiopeia_vanilla"),
+      avg_neighbor_tree_dist_startle = avg_neighbor_tree_dist_fun(startle_tree, "STARTLE"),
+      avg_neighbor_tree_dist_linrace = avg_neighbor_tree_dist_fun(tree_linrace, "LinRace")
+    )
+
+    all_results <- rbind(all_results, benchmark_results)
+
+    # Print results immediately after each run
+    cat("  ✓ Complete!\n")
+    cat("\n  === RESULTS ===\n")
+    cat(sprintf("  Timing (seconds):\n"))
+    cat(sprintf("    NJ:                %.2fs\n", time_nj))
+    cat(sprintf("    LineageMap:        %.2fs\n", time_lm_nj))
+    if (!is.na(time_cassiopeia_nj)) cat(sprintf("    Cassiopeia (NJ):   %.2fs\n", time_cassiopeia_nj))
+    if (!is.na(time_cassiopeia_vanilla)) cat(sprintf("    Cassiopeia (van):  %.2fs\n", time_cassiopeia_vanilla))
+    if (!is.na(time_startle)) cat(sprintf("    STARTLE:           %.2fs\n", time_startle))
+
+    cat(sprintf("\n  Accuracy Metrics:\n"))
+    cat(sprintf("    RF Distance (lower is better):\n"))
+    cat(sprintf("      NJ:              %.4f\n", benchmark_results$rf_baseline_nj))
+    cat(sprintf("      LineageMap:      %.4f\n", benchmark_results$rf_lineagemap_nj))
+    if (!is.na(benchmark_results$rf_cassiopeia_nj)) cat(sprintf("      Cassiopeia (NJ): %.4f\n", benchmark_results$rf_cassiopeia_nj))
+    if (!is.na(benchmark_results$rf_cassiopeia_vanilla)) cat(sprintf("      Cassiopeia (van):%.4f\n", benchmark_results$rf_cassiopeia_vanilla))
+    if (!is.na(benchmark_results$rf_startle)) cat(sprintf("      STARTLE:         %.4f\n", benchmark_results$rf_startle))
+
+    cat(sprintf("\n    Nye Similarity (higher is better):\n"))
+    cat(sprintf("      NJ:              %.4f\n", benchmark_results$nye_baseline_nj))
+    cat(sprintf("      LineageMap:      %.4f\n", benchmark_results$nye_lineagemap_nj))
+    if (!is.na(benchmark_results$nye_cassiopeia_nj)) cat(sprintf("      Cassiopeia (NJ): %.4f\n", benchmark_results$nye_cassiopeia_nj))
+    if (!is.na(benchmark_results$nye_cassiopeia_vanilla)) cat(sprintf("      Cassiopeia (van):%.4f\n", benchmark_results$nye_cassiopeia_vanilla))
+    if (!is.na(benchmark_results$nye_startle)) cat(sprintf("      STARTLE:         %.4f\n", benchmark_results$nye_startle))
+
+    cat(sprintf("\n    Avg Neighbor Tree Dist (lower is better):\n"))
+    cat(sprintf("      NJ:              %.4f\n", benchmark_results$avg_neighbor_tree_dist_baseline_nj))
+    cat(sprintf("      LineageMap:      %.4f\n", benchmark_results$avg_neighbor_tree_dist_lineagemap_nj))
+    if (!is.na(benchmark_results$avg_neighbor_tree_dist_cassiopeia_nj)) cat(sprintf("      Cassiopeia (NJ): %.4f\n", benchmark_results$avg_neighbor_tree_dist_cassiopeia_nj))
+    if (!is.na(benchmark_results$avg_neighbor_tree_dist_cassiopeia_vanilla)) cat(sprintf("      Cassiopeia (van):%.4f\n", benchmark_results$avg_neighbor_tree_dist_cassiopeia_vanilla))
+    if (!is.na(benchmark_results$avg_neighbor_tree_dist_startle)) cat(sprintf("      STARTLE:         %.4f\n", benchmark_results$avg_neighbor_tree_dist_startle))
+
+    cat("\n")
+  processed_sims <- c(processed_sims, sim_name)
+
+  }, error = function(e) {
+    cat(sprintf("  ✗ Error: %s\n\n", e$message))
+  })
+}
+
+# Save results
+cat("SAVING RESULTS\n")
+
+write.csv(all_results, "/localscratch/xpan78/benchmark_results_linrace.csv", row.names = FALSE)
+cat(sprintf("Results saved to: %s\n\n", output_file))
+
+# Print summary statistics
+cat("SUMMARY STATISTICS\n")
+
+if (nrow(all_results) > 0) {
+  # Reshape for method comparison
+  all_results_long <- all_results %>%
+    select(-sim_name, -replicate) %>%
+    pivot_longer(
+      cols = starts_with(c("rf_", "nye_", "ancestor_", "path_", "time_", "avg_")),
+      names_to = c("metric", "method"),
+      names_pattern = "^(.+?)_(cassiopeia_vanilla|cassiopeia_nj|lm_nj|startle|linrace|nj)$",
+      values_to = "value"
+    )
+  
+  summary_stats <- all_results_long %>%
+    group_by(set_name, ncells, nchars, dropout, method, metric) %>%
+    summarise(
+      n = sum(!is.na(value)),
+      mean = mean(value, na.rm = TRUE),
+      sd = sd(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      min = min(value, na.rm = TRUE),
+      max = max(value, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(set_name, metric, method)
+  
+  print(summary_stats, n = 100)
+  
+  # Save summary
+  summary_file <- file.path(benchmark_dir, "benchmark_summary.csv")
+  #write.csv(summary_stats, summary_file, row.names = FALSE)
+  cat(sprintf("\nSummary saved to: %s\n", summary_file))
+  
+  # Print timing summary
+  cat("\n=== TIMING SUMMARY (seconds) ===\n")
+  timing_summary <- all_results_long %>%
+    filter(grepl("^time", metric)) %>%
+    group_by(method, metric) %>%
+    summarise(
+      n = sum(!is.na(value)),
+      mean = mean(value, na.rm = TRUE),
+      median = median(value, na.rm = TRUE),
+      sd = sd(value, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(metric, mean)
+  
+  print(timing_summary)
+}
+
+cat("EVALUATION COMPLETE!\n")
 ```
+
+
 

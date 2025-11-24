@@ -86,7 +86,7 @@ FindBestTree <- function(muts,meta, labels, state_lineages, newick_lookup = NULL
 
   if (length(labels) == 2){
     best_tree <- rtree(2)
-    best_tree$tip.label <- leafs
+    best_tree$tip.label <- rownames(muts)
     best_tree$edge.length <- rep(1, length(best_tree$edge.length))
 
     return(best_tree)
@@ -203,6 +203,7 @@ Build_LineageMap_pd <- function(muts, meta, state_lineages,
                                       backbone_type = c("majority", "NJ_median", "NJ_mean"),
                                       outer_cores = 12, inner_cores = 5,lambda1 = 0.05,lambda2 = 0.1,alpha = 1) {
   labels <- rownames(muts)
+  rownames(meta) <- labels
   groups <- LouvainCluster(muts, threshold = threshold)
   #names(groups) <- sub("cell_", "",labels)
   if (length(unique(groups)) <= 2){
@@ -229,7 +230,7 @@ Build_LineageMap_pd <- function(muts, meta, state_lineages,
       res <- FindBestTree(muts_sub, meta_sub, labels = labels_sub,
                           state_lineages, maxIter = max_Iter,
                           n_chains = inner_cores,lambda1 = lambda1,lambda2 = lambda2,alpha = alpha)  # pass fewer chains
-      res$tip.label <- sub("cell_","",labels[as.numeric(res$tip.label)])
+      #res$tip.label <- sub("cell_","",labels[as.numeric(res$tip.label)])
       res$name <- dt$group_name[i]
       return(res)
     } else {
@@ -390,7 +391,8 @@ starting_tree_from_data <- function(X,loc,lambda = 0.9) {
     dist_barcode <- dist_barcode / max(dist_barcode)
   }
   if (sum(dist_spatial)>0){
-    dist_spatial <- dist_spatial / max(dist_spatial)}
+    dist_spatial <- dist_spatial / max(dist_spatial)
+  }
 
   # ---- Weighted combination ----
   dist_combined <- lambda * dist_barcode + (1 - lambda) * dist_spatial

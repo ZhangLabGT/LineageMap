@@ -189,3 +189,244 @@ compute_ancestral_coordinates <- function(tree, coords, method = c("mean", "medi
 
   return(res)
 }
+
+visualize_tree_3d <- function(tree_ultra,loc_lm_nj,cs_lm_nj){
+  root_node <- Ntip(tree_ultra) + 1
+  depths <- node.depth.edgelength(tree_ultra)
+  depths <- depths / max(depths) * 10  # rescale to 0–10 range for visualization
+
+  # --- 2️⃣ Combine location + z + inferred cell state ---
+  df_nodes <- loc_lm_nj %>%
+    mutate(
+      node = as.numeric(loc_lm_nj$id),
+      z = depths[node],
+      state = as.factor(cs_lm_nj)   # directly assign inferred states
+    )
+
+  # --- 3️⃣ Build edge (parent-child) coordinate table ---
+  edges <- as.data.frame(tree_ultra$edge)
+  colnames(edges) <- c("parent", "child")
+
+  edges_coords <- edges %>%
+    left_join(df_nodes %>% rename(x_parent = x, y_parent = y, z_parent = z), by = c("parent" = "node")) %>%
+    left_join(df_nodes %>% rename(x_child = x, y_child = y, z_child = z), by = c("child" = "node"))
+
+  # --- 4️⃣ Define state colors ---
+  num_states <- length(unique(df_nodes$state))
+  palette_colors <- brewer.pal(max(3, min(num_states, 12)), "Set1")
+  state_colors <- setNames(palette_colors[1:num_states], sort(unique(df_nodes$state)))
+
+  # --- 5️⃣ Create interactive 3D plot ---
+  fig <- plot_ly()
+
+  # Add node markers
+  fig <- fig %>%
+    add_markers(
+      data = df_nodes,
+      x = ~x, y = ~y, z = ~z,
+      color = ~state,
+      colors = state_colors,
+      marker = list(size = 6, opacity = 0.9, line = list(width = 1.5, color = "black")),
+      text = ~paste("Node:", node, "<br>State:", state),
+      hoverinfo = "text"
+    )
+
+  # Add connecting edges (ancestor → descendant)
+  for (i in 1:nrow(edges_coords)) {
+    fig <- fig %>% add_trace(
+      type = "scatter3d",
+      mode = "lines",
+      x = c(edges_coords$x_parent[i], edges_coords$x_child[i]),
+      y = c(edges_coords$y_parent[i], edges_coords$y_child[i]),
+      z = c(edges_coords$z_parent[i], edges_coords$z_child[i]),
+      line = list(color = 'black', width = 2.5),
+      showlegend = FALSE
+    )
+  }
+
+  # --- 6️⃣ Optionally: Add semi-transparent planes for generations ---
+  for (z_level in unique(df_nodes$z)) {
+    fig <- fig %>% add_trace(
+      type = "mesh3d",
+      x = c(min(df_nodes$x), max(df_nodes$x), max(df_nodes$x), min(df_nodes$x)),
+      y = c(min(df_nodes$y), min(df_nodes$y), max(df_nodes$y), max(df_nodes$y)),
+      z = rep(z_level, 4),
+      color = I("gray"),
+      opacity = 0.15,
+      showscale = FALSE
+    )
+  }
+
+  # --- 7️⃣ Final layout ---
+  fig <- fig %>%
+    layout(scene = list(
+      xaxis = list(title = "Spatial X"),
+      yaxis = list(title = "Spatial Y"),
+      zaxis = list(title = "Lineage Depth"),
+      camera = list(eye = list(x = 1.3, y = 1.3, z = 1))
+    ))
+
+  fig <- fig %>%
+    layout(
+      scene = list(
+        xaxis = list(
+          title = list(text = "Spatial X", font = list(size = 22)),
+          tickfont = list(size = 18)
+        ),
+        yaxis = list(
+          title = list(text = "Spatial Y", font = list(size = 22)),
+          tickfont = list(size = 18)
+        ),
+        zaxis = list(
+          title = list(text = "Lineage Depth", font = list(size = 22)),
+          tickfont = list(size = 18)
+        ),
+        camera = list(eye = list(x = 1.3, y = 1.3, z = 1))
+      ),
+      margin = list(l = 0, r = 0, b = 0, t = 0),
+      font = list(family = "Arial", size = 20, color = "black")
+    )
+  fig <- fig %>%
+    layout(scene = list(
+      xaxis = list(backgroundcolor = "rgb(245,245,245)"),
+      yaxis = list(backgroundcolor = "rgb(245,245,245)"),
+      zaxis = list(backgroundcolor = "rgb(245,245,245)")
+    ))
+
+  fig <- fig %>%
+    layout(
+      scene = list(
+        camera = list(eye = list(x = 1.6, y = 1.6, z = 0.1))
+      )
+    )
+  fig
+}
+
+
+visualize_tree_2d <- function(loc_data,cell_types,internal = FALSE){
+  if (internal){
+    loc_df <- loc_data %>%
+      mutate(
+        node = as.numeric(loc_data$id),
+        state = state)
+
+    # Extract edges as data frame (parent-child pairs)
+    edges_df <- as.data.frame(tree_ultra$edge)
+    colnames(edges_df) <- c("parent", "child")
+
+    # Merge coordinates for edges
+    edge_coords <- edges_df %>%
+      left_join(loc_df, by = c("parent" = "node")) %>%
+      rename(x_parent = x, y_parent = y, state_parent = state) %>%
+      left_join(loc_df, by = c("child" = "node")) %>%
+      rename(x_child = x, y_child = y, state_child = state)
+
+    leaf_nodes <- setdiff(edge_coords$child, edge_coords$parent)
+    loc_df <- loc_df %>%
+      mutate(node_type = ifelse(node %in% leaf_nodes, "Leaf", "Internal"))
+
+    # Plot
+    p <- ggplot() +
+      # Edges (light gray dashed)
+      #geom_segment(
+      #  data = edge_coords,
+      #  aes(x = x_parent, y = y_parent, xend = x_child, yend = y_child),
+      #  color = "gray70", linetype = "dashed",
+      #  linewidth = 0.4, alpha = 0.8
+      #) +
+
+      # Nodes (leaf vs internal with different shapes)
+      geom_point(
+        data = loc_df,
+        aes(
+          x = x, y = y,
+          color = factor(state),
+          shape = node_type
+        ),
+        size = 4, stroke = 0.4, alpha = 0.9
+      ) +
+
+      # Manual color & shape scales
+      scale_color_manual(values = colors, name = "Cell state") +
+      scale_shape_manual(
+        values = c("Internal" = 17, "Leaf" = 16),
+        name = "Node type"
+      ) +
+
+      # Coordinate scaling
+      coord_fixed() +
+
+      # Labels
+      labs(
+        x = "x coordinate",
+        y = "y coordinate",
+        title = "2D Spatial Visualization of Lineage Tree"
+      ) +
+
+      # Publication-ready theme
+      theme_minimal(base_family = "Helvetica", base_size = 16) +
+      theme(
+        plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 14, color = "black"),
+        axis.ticks = element_line(size = 0.6, color = "black"),
+        axis.ticks.length = unit(0.15, "cm"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 13),
+        legend.key.size = unit(0.8, "cm"),
+        panel.grid = element_blank(),
+        plot.margin = margin(10, 10, 10, 10),
+        legend.position = "right"
+      )
+    return(p)
+  } else{
+    loc_df <- loc_data %>%
+      mutate(
+        node = as.numeric(rownames(loc_data)),
+        state = loc_data$state)
+
+
+    # Define a color palette for states
+    colors <- c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
+                "#ff7f00", "#ffff33", "#a65628", "#f781bf", "#999999")
+    state_levels <- sort(unique(cs_lm_nj))
+    colors <- setNames(palette_colors[1:num_states], sort(unique(df_nodes$state)))
+
+    # Plot
+    p <- ggplot() +
+      # Edges (light gray dashed)
+      # Nodes (colored by cell state)
+      geom_point(data = loc_df,
+                 aes(x = x, y = y, color = factor(state)),
+                 size = 4, stroke = 0.4, alpha = 0.9) +
+      scale_color_manual(values = colors, name = "Cell state") +
+      theme_minimal(base_size = 14) +
+      coord_fixed() +
+      labs(x = "x coordinate", y = "y coordinate",
+           title = "2D Spatial Visualization of Lineage Tree") +
+      theme(
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        legend.position = "right"
+      )
+    p+
+
+      # Publication-ready theme
+      theme_minimal(base_family = "Helvetica", base_size = 16) +
+      theme(
+        plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+        axis.title = element_text(size = 16, face = "bold"),
+        axis.text = element_text(size = 14, color = "black"),
+        axis.ticks = element_line(size = 0.6, color = "black"),
+        axis.ticks.length = unit(0.15, "cm"),
+        legend.title = element_text(size = 15, face = "bold"),
+        legend.text = element_text(size = 13),
+        legend.key.size = unit(0.8, "cm"),
+        panel.grid = element_blank(),
+        plot.margin = margin(10, 10, 10, 10),
+        legend.position = "right"
+      )
+    return(p)
+  }
+
+}

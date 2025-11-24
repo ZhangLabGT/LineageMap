@@ -191,3 +191,114 @@ SubgroupTree_NJ <- function(X, groups, dropout = "-", w_mut = 1, w_ref = 0.5, su
 
   return(list(tree_backbone = Treenj, backbone_meta = dt))
 }
+
+
+LouvainClusterDynamic <- function(
+    X,
+    dropout = "-",
+    threshold = NULL,           # if NULL → determine dynamically
+    resolution = 1,
+    dmat = NULL,
+    method = c("otsu", "quantile", "dropout_rule")
+) {
+  method <- match.arg(method)
+
+  # Compute distance matrix if needed
+  if (is.null(dmat)) {
+    dmat <- DropoutDistMatrix(X, dropout = dropout)
+    n <- nrow(X)
+  } else {
+    n <- nrow(dmat)
+  }
+
+  sim <- 1 - dmat
+  sim[is.na(sim)] <- 0
+  sim_vals <- sim[upper.tri(sim)]
+
+  # ------------------------
+  # Dynamic thresholding
+  # ------------------------
+  if (is.null(threshold)) {
+
+    # Estimate dropout level
+    dropout_rate <- mean(X == dropout)
+    # Ensures numerical safety
+    dropout_rate <- max(min(dropout_rate, 0.99), 0.01)
+
+    if (method == "otsu") {
+      # Otsu thresholding
+      threshold <- otsu_threshold(sim_vals)
+
+    } else if (method == "quantile") {
+      # Higher dropout -> higher quantile cutoff (be stricter)
+      # Low dropout -> allow lower similarity edges
+      q <- 0.90 + 0.05 * dropout_rate
+      q <- min(q, 0.98)
+      thr_sim <- quantile(sim_vals, probs = q, na.rm = TRUE)
+      threshold <- 1 - thr_sim
+
+    } else if (method == "dropout_rule") {
+      # Simple dropout-based threshold rule
+      # High dropout (>60%) → threshold ~ 0.35
+      # Low dropout (<10%) → threshold ~ 0.15
+      threshold <- 0.12 + 0.4 * dropout_rate
+    }
+  }
+
+  # ------------------------
+  # Build similarity graph
+  # ------------------------
+  edges <- which(sim > (1 - threshold) & upper.tri(sim), arr.ind = TRUE)
+
+  default_membership <- function(n) {
+    x <- 1:n
+    names(x) <- 1:n
+    x
+  }
+
+  if (nrow(edges) == 0) {
+    return(default_membership(n))
+  }
+
+  g <- graph_from_data_frame(
+    data.frame(
+      from = edges[,1],
+      to   = edges[,2],
+      weight = sim[edges]
+    ),
+    directed = FALSE,
+    vertices = data.frame(name = 1:n)
+  )
+
+  cl <- cluster_louvain(g, weights = E(g)$weight, resolution = resolution)
+  return(membership(cl))
+}
+
+
+# Helper: Otsu thresholding for continuous values
+otsu_threshold <- function(x, nbins = 200) {
+  x <- x[is.finite(x)]
+  h <- hist(x, breaks = nbins, plot = FALSE)
+  counts <- h$counts
+  mids <- h$mids
+  total <- sum(counts)
+  sumB <- 0
+  wB <- 0
+  maximum <- 0
+  sum1 <- sum(mids * counts)
+  for (i in 1:length(counts)) {
+    wB <- wB + counts[i]
+    if (wB == 0) next
+    wF <- total - wB
+    if (wF == 0) break
+    sumB <- sumB + mids[i] * counts[i]
+    mB <- sumB / wB
+    mF <- (sum1 - sumB) / wF
+    between <- wB * wF * (mB - mF)^2
+    if (between > maximum) {
+      threshold <- mids[i]
+      maximum <- between
+    }
+  }
+  return(1 - threshold)  # convert similarity threshold to distance threshold
+}

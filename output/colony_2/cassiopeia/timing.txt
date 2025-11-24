@@ -1,0 +1,3 @@
+method	time
+vanilla	0.5077
+nj	5.1966

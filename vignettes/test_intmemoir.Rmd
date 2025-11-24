@@ -19,6 +19,7 @@ knitr::opts_chunk$set(
 library("devtools")
 library("dplyr")
 library(ggplot2)
+library(FNN)
 library(SpaTedSim)
 library(plotly)
 library(TreeDist)
@@ -29,6 +30,7 @@ library(parallel)
 library(MASS)
 library(cluster)
 library(mclust)
+library(RColorBrewer)
 load_all()
 ```
 
@@ -44,59 +46,10 @@ colnames(expr_all) <- c("colony","cellID","Zfp42","Aurka","Tfcp2l1","Esrrb","Tbx
 ```{r}
 # Subset rows where colony == 2
 expr_c2 <- expr_all[expr_all$colony == 2, ]
-```
-
-```{r}
 tree_c2 <- read.tree("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/files_for_LMA/consensus_trees_col2_states_SBC_filt_BEAST_cons.newick")
 tree_c2_id <- read.tree("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/BEAST_analysis/Trial4/tree2_id.newick")
 tree_c2_id$edge.length <- rep(1,length(tree_c2_id$edge.length))
 #tree_c2_id$tip.label <- paste0("cell_",tree_c2_id$tip.label)
-```
-
-```{r}
-# Read the CSV file (space-separated)
-distances_all <- read.table("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/distances_cells.csv",
-                            sep = " ", header = TRUE)
-
-# Subset rows where colony == 1
-distances_sub <- distances_all[distances_all$colony == 1, ]
-
-# Get unique cell IDs from both cell1 and cell2 columns
-ncells <- unique(c(distances_sub$cell1, distances_sub$cell2))
-
-buildmatrix <- function(distances, colony = 1) {
-  # Subset rows where colony == given value
-  distances_sub <- distances[distances$colony == colony, ]
-  
-  # Determine number of cells (maximum cell ID)
-  ncells <- max(unique(distances_sub$cell1))
-  
-  # Initialize empty matrix
-  d_pairwise <- matrix(0, nrow = ncells, ncol = ncells)
-  
-  # Fill the matrix
-  for (i in seq_len(nrow(distances_sub))) {
-    cell1 <- distances_sub$cell1[i]
-    cell2 <- distances_sub$cell2[i]
-    val   <- distances_sub$coph_dist[i]
-    
-    d_pairwise[cell1, cell2] <- val
-    d_pairwise[cell2, cell1] <- val
-  }
-  
-  # Remove all-zero rows
-  nonzero_rows <- apply(d_pairwise, 1, function(x) !all(x == 0))
-  arr_nonzero_rows <- d_pairwise[nonzero_rows, , drop = FALSE]
-  
-  # Remove all-zero columns
-  nonzero_cols <- apply(arr_nonzero_rows, 2, function(x) !all(x == 0))
-  arr_nonzero <- arr_nonzero_rows[, nonzero_cols, drop = FALSE]
-  
-  return(arr_nonzero)
-}
-
-# Call the function
-d_pairwise <- buildmatrix(distances_all)
 ```
 
 ```{r}
@@ -115,201 +68,6 @@ loc_data_2 <- loc_data_2[loc_data_2$node %in% ncells, ]
 
 rownames(d_pairwise) <- loc_data_2$node
 colnames(d_pairwise) <- loc_data_2$node
-```
-
-```{r}
-n_data <- 5
-df_stats <- c()
-seeds <- runif(10000, 1, 99999)
-
-for (k in 1:n_data) {
-  set.seed(seeds[k])
-  print(sprintf("running test No. %i",k))
-  ncells <- nrow(expr_sub)
-  phyla <- read.tree(text='((1:2, (4:1, 5:1):1):1);')
-  #phyla <- read.tree(text='((t1:2, t2:2):1, (t3:2, t4:2):1):2;')
-  N_nodes <- 2*ncells-2
-  p_d <- 0
-  mu <- 0.1
-  N_ms <- 50
-  lambda <- 0.05
-  N_char <- 8
-  
-  #Simulating lineage data
-  T_cell <- tree_c2_id
-  cell_edges <- cbind(T_cell$edge,T_cell$edge.length)
-  cell_edges <- cbind(c(1:length(cell_edges[,1])),cell_edges)
-  cell_connections <- table(c(cell_edges[,2],cell_edges[,3]))
-  cell_root <- as.numeric(names(cell_connections)[cell_connections==2])
-  Node_cell <- cell_root
-  root_barcode <- rep(0,N_char)
-  muts <-GenerateBarcode(ncells, p_d = p_d, Sigma = 0.5,mu = mu, N_char = N_char, N_ms = N_ms, unif_on = FALSE, T_cell = T_cell)
-  #We only need the leaf cells for experiments
-  muts <- drop_characters(muts,drop_rate = 0.2,mode = "row")
-  muts_leaves <- muts[1:ncells,]
-  rownames(muts_leaves) <-  T_cell$tip.label
-  tree <- tree_c2_id
-  
-  #simulate true counts
-  loc_data <- loc_data_2%>%dplyr::select(x_pos,y_pos)
-  colnames(loc_data) <- c("x","y")
-  tree_init <- NJ_from_barcode(muts_leaves)
-  tree_init$tip.label <- sub("cell_","",tree_init$tip.label)
-  result_init <- LikelihoodCal_ST(tree_init, muts_leaves, expr_sub$state, phyla, loc_data,
-  lambda1 = 0.02, lambda2 = 0.1, alpha = 1)
-  loc_init <- result_init$loc_data
-  #order <- sample(nrow(muts_leaves))
-  #df_spatial_continuous <- df_spatial_continuous[order,]
-  #muts_leaves <- muts_leaves[order,]
-  muts_leaves <- muts_leaves[str_sort(rownames(muts_leaves), numeric = TRUE),]
-  df_spatial_continuous <- data.frame(cellid = paste0("cell_",expr_sub$cellID),x = loc_data$x,y = loc_data$y,state = expr_sub$state)
-
-  # LineageMap (mode = "majority")
-  tree_lm_majority <- Build_LineageMap_pd(muts_leaves, df_spatial_continuous, phyla,
-                                       threshold = 2/N_char, backbone_type = "majority",outer_cores = 12,inner_cores = 5)
-  res_lm_majority <- LikelihoodCal_ST(tree_lm_majority, muts_leaves, df_spatial_continuous$state,
-                                      phyla, loc_data, lambda1 = 0.1, lambda2 = 0.1, alpha = 1)
-  loc_lm_majority <- res_lm_majority$loc_data
-
-  # LineageMap (mode = "NJ_median")
-  tree_lm_nj <- Build_LineageMap_pd(muts_leaves, df_spatial_continuous, phyla,
-                                       threshold = 2/N_char, backbone_type = "NJ_median",outer_cores = 12,inner_cores = 5)
-  res_lm_nj <- LikelihoodCal_ST(tree_lm_nj, muts_leaves, df_spatial_continuous$state,
-                                phyla, loc_data, lambda1 = 0.1, lambda2 = 0.1, alpha = 1)
-  loc_lm_nj <- res_lm_nj$loc_data
-  
-  #Add two more baselines: Cassiopeia and Startle
-  
-  # --- Coordinate MSE ---
-  #df_benchmark <- df_combined %>% arrange(cellid)
-
-  mse_fun <- function(loc,tree){
-    error <- 0
-    ncell <- length(tree$tip.label)
-    for (i in 1:ncell){
-      cell <- tree$tip.label[i]
-      if (startsWith(cell,"cell_")){
-        cellid <- as.numeric(str_sub(cell,start = 6))
-      } else{
-        cellid <- as.numeric(cell)
-      }
-      error <- error + (loc_data_2$parent_x_pos[loc_data_2$node == cellid] - loc$x[tree$edge[tree$edge[,2] == i,1]])^2 + (loc_data_2$parent_y_pos[loc_data_2$node == cellid] - loc$y[tree$edge[tree$edge[,2] == i,1]])^2
-      #print(error)
-    }
-    
-    error / ncell
-  } 
-  
-  
-  #calculate chronological_divergence_score
-  tree_gt <- tree_c2_id
-  tree_gt$tip.label <- sub("cell_","",tree_gt$tip.label)
-  #tree_gt$tip.label <- as.character(1:ncells)
-  loc_gt <- loc_data
-  cds_nj <- chronological_divergence_score(tree_gt, tree_init)
-  cds_lm_majority <- chronological_divergence_score(tree_gt, tree_lm_majority)
-  cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
-  
-  #calculate spatial topological consistency
-  #stc_nj <- spatio_topological_consistency(tree_gt, tree_init, loc_data, loc_gt)
-  #stc_lm_majority <- spatio_topological_consistency(tree_gt, tree_lm_majority, loc_data, loc_gt)
-  #stc_lm_nj <- spatio_topological_consistency(tree_gt, tree_lm_nj, loc_data, loc_gt)
-  
-  #calculate generation aware divergence
-  gad_nj <- generation_aware_divergence(tree_gt, tree_init)
-  gad_lm_majority <- generation_aware_divergence(tree_gt, tree_lm_majority)
-  gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
-  
-  #calculate spatial topolo
-  #csm_nj <- celltype_specific_metrics(tree_gt, tree_init, df_spatial_continuous$state, df_spatial_continuous$state)
-  #csm_lm_majority <- celltype_specific_metrics(tree_gt, tree_lm_majority, df_spatial_continuous$state, df_spatial_continuous$state)
-  #csm_lm_nj <- celltype_specific_metrics(tree_gt, tree_lm_nj, df_spatial_continuous$state, df_spatial_continuous$state)
-  
-  # Metrics helper
-  #mse_fun <- function(loc) mean((loc$x - gt_x)^2) + mean((loc$y - gt_y)^2)
-  rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
-  nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
-  anc_fun <- function(t) {
-    tips <- tree_gt$tip.label
-    correct <- 0; total <- 0
-    for (tip in tips) {
-      anc_true <- Ancestors(tree_gt, tip, type = "all")
-      anc_infer <- Ancestors(t, tip, type = "all")
-      total <- total + length(anc_true)
-      correct <- correct + sum(anc_true %in% anc_infer)
-    }
-    correct / total
-  }
-  path_corr_fun <- function(t) {
-    common_tips <- intersect(rownames(cophenetic(tree_gt)), rownames(cophenetic(t)))
-    cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
-        as.vector(cophenetic(t)[common_tips, common_tips]))
-  }
-
-  # Compute all metrics
-  benchmark_results <- data.frame(
-    mse_nj = mse_fun(loc_init,tree_init),
-    mse_lm_majority = mse_fun(loc_lm_majority,tree_lm_majority),
-    mse_lm_Q = mse_fun(loc_lm_nj,tree_lm_nj),
-
-    rf_nj = rf_fun(tree_init),
-    rf_lm_majority = rf_fun(tree_lm_majority),
-    rf_lm_Q = rf_fun(tree_lm_nj),
-
-    nye_nj = nye_fun(tree_init),
-    nye_lm_majority = nye_fun(tree_lm_majority),
-    nye_lm_Q = nye_fun(tree_lm_nj),
-
-    ancestor_accuracy_nj = anc_fun(tree_init),
-    ancestor_accuracy_lm_majority = anc_fun(tree_lm_majority),
-    ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
-
-    path_length_corr_nj = path_corr_fun(tree_init),
-    path_length_corr_lm_majority = path_corr_fun(tree_lm_majority),
-    path_length_corr_lm_Q = path_corr_fun(tree_lm_nj),
-    
-    chronological_divergence_score_nj = cds_nj,
-    chronological_divergence_score_lm_majority = cds_lm_majority,
-    chronological_divergence_score_lm_Q = cds_lm_nj,
-    
-    generation_aware_divergence_nj = gad_nj$mean_error,
-    generation_aware_divergence_lm_majority = gad_lm_majority$mean_error,
-    generation_aware_divergence_lm_Q = gad_lm_nj$mean_error
-    
-    #spatio_topological_consistency_nj = stc_nj,
-    #spatio_topological_consistency_lm_majority = stc_lm_majority,
-    #spatio_topological_consistency_lm_Q = stc_lm_nj
-    
-  )
-
-  df_stats <- rbind(df_stats, benchmark_results)
-}
-#colnames(df_stats) <- c("mse_nj","mse_lm_majority","mse_lm_Q","rf_nj","rf_lm_majority","rf_lm_Q","nye_nj","nye_lm_majority","nye_lm_Q","ancestor_accuracy_nj","ancestor_accuracy_lm_majority","ancestor_accuracy_lm_Q","path_length_corr_nj","path_length_corr_lm_majority","path_length_corr_lm_Q")
-
-# Convert to long format
-df_long <- df_stats %>%
-  pivot_longer(
-    cols = everything(),
-    names_to = c("metric", "method"),
-    names_pattern = "(.*)_(nj|lm_majority|lm_Q)",
-    values_to = "value"
-  )
-
-# Visualization
-ggplot(df_long, aes(x = method, y = value, fill = method)) +
-  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
-  facet_wrap(~ metric, scales = "free_y") +
-  theme_minimal(base_size = 14) +
-  labs(
-    title = "Performance Comparison: NJ vs LineageMap (Majority & NJ_median)",
-    x = "Method",
-    y = "Metric Value"
-  ) +
-  scale_fill_manual(values = c(
-    "nj" = "skyblue",
-    "lm_majority" = "tomato",
-    "lm_Q" = "palegreen3"
-  ))
 ```
 
 
@@ -548,7 +306,6 @@ get_root_to_leaf_paths <- function(tree) {
 ```
 
 ```{r}
-library(RColorBrewer)
 # --- 1️⃣ Compute depth (generation or time) for z-axis ---
 #tree_ultra <- chronos(tree_lm_nj, lambda = 1)
 tree_ultra <- reroot_tree(tree_lm_nj)
@@ -783,6 +540,22 @@ p+
 ```
 
 ```{r}
+loc_df <- loc_nj %>%
+  mutate(
+    node = as.numeric(loc_lm_nj$id),
+         state = cs_lm_nj)
+
+# Extract edges as data frame (parent-child pairs)
+edges_df <- as.data.frame(tree_ultra$edge)
+colnames(edges_df) <- c("parent", "child")
+
+# Merge coordinates for edges
+edge_coords <- edges_df %>%
+  left_join(loc_df, by = c("parent" = "node")) %>%
+  rename(x_parent = x, y_parent = y, state_parent = state) %>%
+  left_join(loc_df, by = c("child" = "node")) %>%
+  rename(x_child = x, y_child = y, state_child = state)
+
 leaf_nodes <- setdiff(edge_coords$child, edge_coords$parent)
 loc_df <- loc_df %>%
   mutate(node_type = ifelse(node %in% leaf_nodes, "Leaf", "Internal"))
@@ -840,6 +613,7 @@ p <- ggplot() +
     plot.margin = margin(10, 10, 10, 10),
     legend.position = "right"
   )
+p
 ```
 
 
@@ -986,7 +760,7 @@ LineageMap_run_all <- function(colony = c("2","4","5")){
   benchmark_results_all <- c()
   for (colony_id in colony){
     tree_gt <- read.tree(paste0("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/BEAST_analysis/Trial4/tree",colony_id, "_id.newick"))
-    tree_gt$edge.length <- rep(1,length(tree_c2_id$edge.length))
+    tree_gt$edge.length <- rep(1,length(tree_gt$edge.length))
     
     loc_data <- read.table(paste0("/project/xpan78/data/BaseMEM_Magic/Magic/Figures3_5_and_SupFigures2_4-6/lineage_analysis/loc_data_",colony_id,".csv"),
                          sep = " ", header = TRUE)
@@ -1020,21 +794,37 @@ LineageMap_run_all <- function(colony = c("2","4","5")){
     cs_lm_nj <- res_lm_nj$cell_state_infer
     loc_lm_ou$state <- cs_lm_nj
     
+  
+    
+    #p1 <- visualize_tree_2d(loc_data,cs_lm_nj,internal = FALSE)
+    #p2 <- visualize_tree_2d(loc_lm_ou,cs_lm_nj,internal = TRUE)
+    #p3 <- visualize_tree_3d(tree_ultra,loc_lm_nj,cs_lm_nj)
+    
     #tree_gt <- tree_c2_id
     tree_init <- NJ_from_barcode(data_sequence)
+    res_nj <- LikelihoodCal_ST(tree_init, data_sequence, loc_data$state,
+                                    state_lineages, loc_data %>% dplyr::select(x,y),lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+    temp <- res_nj$loc_data
+    res_nj <- LikelihoodCal_ST_OU(tree_init, data_sequence, loc_data$state,
+                                    state_lineages, loc_data %>% dplyr::select(x,y),lambda1 = 0.05, lambda2 = 0.1, alpha = 1)
+    loc_nj <- res_nj$loc_data
+    loc_nj$id <- temp$id
+    cs_nj <- res_nj$cell_state_infer
+    loc_nj$state <- cs_nj
     
     loc_gt <- loc_data
-    cds_nj <- chronological_divergence_score(tree_gt, tree_init)
-    cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
+    
+    #cds_nj <- chronological_divergence_score(tree_gt, tree_init)
+    #cds_lm_nj <- chronological_divergence_score(tree_gt, tree_lm_nj)
     
     #calculate spatial topological consistency
-    #stc_nj <- spatio_topological_consistency(tree_gt, tree_init, loc_data, loc_gt)
+    #stc_nj <- spatio_topological_consistency(tree_gt, tree_init, loc_nj, loc_gt)
     #stc_lm_majority <- spatio_topological_consistency(tree_gt, tree_lm_majority, loc_data, loc_gt)
-    #stc_lm_nj <- spatio_topological_consistency(tree_gt, tree_lm_nj, loc_data, loc_gt)
+    #stc_lm_nj <- spatio_topological_consistency(tree_gt, tree_lm_nj, loc_nj, loc_gt)
     
     #calculate generation aware divergence
-    gad_nj <- generation_aware_divergence(tree_gt, tree_init)
-    gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
+    #gad_nj <- generation_aware_divergence(tree_gt, tree_init)
+    #gad_lm_nj <- generation_aware_divergence(tree_gt, tree_lm_nj)
     
     rf_fun <- function(t) RF.dist(tree_gt, t, normalize = TRUE)
     nye_fun <- function(t) NyeSimilarity(tree_gt, t, normalize = TRUE)
@@ -1054,29 +844,28 @@ LineageMap_run_all <- function(colony = c("2","4","5")){
       cor(as.vector(cophenetic(tree_gt)[common_tips, common_tips]),
           as.vector(cophenetic(t)[common_tips, common_tips]))
     }
-    
-    benchmark_results_all <- rbind(benchmark_results_all,data.frame(
-    #mse_nj = mse_fun(loc_init,tree_init),
-    #mse_lm_majority = mse_fun(loc_lm_majority,tree_lm_majority),
-    #mse_lm_Q = mse_fun(loc_lm_nj,tree_lm_nj),
+    temp <- data.frame(
+      mse_nj = mse_fun(loc_nj,tree_init),
+      #mse_lm_majority = mse_fun(loc_lm_majority,tree_lm_majority),
+      mse_lm_Q = mse_fun(loc_lm_nj,tree_lm_nj),
     
       rf_nj = rf_fun(tree_init),
-      rf_lm_majority = rf_fun(tree_lm_nj),
+      rf_lm_Q = rf_fun(tree_ultra),
       
       nye_nj = nye_fun(tree_init),
-      nye_lm_Q = nye_fun(tree_lm_nj),
+      nye_lm_Q = nye_fun(tree_ultra),
       
-      ancestor_accuracy_nj = anc_fun(tree_init),
-      ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
+      #ancestor_accuracy_nj = anc_fun(tree_init),
+      #ancestor_accuracy_lm_Q = anc_fun(tree_lm_nj),
       
       path_length_corr_nj = path_corr_fun(tree_init),
-      path_length_corr_lm_Q = path_corr_fun(tree_lm_nj),
+      path_length_corr_lm_Q = path_corr_fun(tree_ultra),
       
-      chronological_divergence_score_nj = cds_nj,
-      chronological_divergence_score_lm_Q = cds_lm_nj,
+      #chronological_divergence_score_nj = cds_nj,
+      #chronological_divergence_score_lm_Q = cds_lm_nj,
       
-      generation_aware_divergence_nj = gad_nj$mean_error,
-      generation_aware_divergence_lm_Q = gad_lm_nj$mean_error,
+      #generation_aware_divergence_nj = gad_nj$mean_error,
+      #generation_aware_divergence_lm_Q = gad_lm_nj$mean_error,
       
       colony = colony_id
       
@@ -1084,12 +873,70 @@ LineageMap_run_all <- function(colony = c("2","4","5")){
       #spatio_topological_consistency_lm_majority = stc_lm_majority,
       #spatio_topological_consistency_lm_Q = stc_lm_nj
     
-    ))
+    )
+    benchmark_results_all <- rbind(benchmark_results_all,temp)
   }
   benchmark_results_all
 }
-LineageMap_run_all()
+benchmark_results_all <- LineageMap_run_all()
 ```
+
+```{r}
+#library(FNN)
+calculate_spatial_coherence <- function(tree,loc){
+  hc <- as.hclust(tree)
+  clone_ids <- cutree(hc, k = 4)
+  
+  # Map tip labels to clone IDs
+  tip_labels <- tree$tip.label
+  clone_map <- data.frame(cell = tip_labels, clone = clone_ids)
+  coords <- as.matrix(df[, c("x", "y")])
+  states <- df$state
+  loc_df <- loc
+  loc_df$cell <- as.character(1:nrow(loc_df))  # adjust if tip labels differ
+  loc_df <- merge(loc_df, clone_map, by.x = "cell", by.y = "cell")
+  
+  # Number of nearest neighbors to consider
+  k <- 5
+  
+  # Find k nearest neighbors (exclude self)
+  nn <- get.knnx(coords, coords, k = k + 1)$nn.index[, -1]  # remove first column (self)
+  
+  # Compute neighborhood purity for each cell
+  purity <- sapply(1:nrow(df), function(i) {
+    mean(states[nn[i, ]] == states[i])
+  })
+  
+  # Global spatial coherence score
+  spatial_coherence_score_state <- mean(purity)
+  
+  # Output
+  print("coherence score by state: ")
+  print(spatial_coherence_score_state)
+  
+  coords <- as.matrix(loc_df[, c("x", "y")])
+  clones <- loc_df$clone
+  
+  k <- 5  # number of nearest neighbors
+  
+  nn <- get.knnx(coords, coords, k = k + 1)$nn.index[, -1]  # exclude self
+  
+  # Purity per cell based on clone
+  purity <- sapply(1:nrow(loc_df), function(i) {
+    mean(clones[nn[i, ]] == clones[i])
+  })
+  
+  # Global spatial coherence score
+  spatial_coherence_by_clone <- mean(purity)
+  print("coherence score by clone: ")
+  print(spatial_coherence_by_clone)
+}
+
+calculate_spatial_coherence(make_ultrametric(tree_init),loc_nj)
+calculate_spatial_coherence(tree_ultra,loc_lm_nj)
+```
+
+
 
 
 
