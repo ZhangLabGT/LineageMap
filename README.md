@@ -74,14 +74,14 @@ A data frame with spatial and state information:
 
 ### 3. State Lineages (`state_lineages`)
 
-A data structure defining the state transition network (from root state to leaf states).
+A list of vectors defining the state transition network (from root state to leaf states).
 
 ## Key Parameters
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `threshold` | Clustering threshold for grouping similar cells | 0.2 |
-| `backbone_type` | Method for backbone reconstruction: "majority", "NJ_median", or "NJ_mean" | "majority" |
+| `backbone_type` | Method for backbone reconstruction: "majority", "NJ_median", or "NJ_mean" | "NJ_median" |
 | `max_Iter` | Maximum iterations for local search optimization | 200 |
 | `lambda1` | Weight for gene expression state likelihood | 0.05 |
 | `lambda2` | Weight for spatial location likelihood | 0.1 |
@@ -103,14 +103,20 @@ tree <- Build_LineageMap_parallel(
 
 ## Method Overview
 
-1. **Clustering**: Group cells based on barcode similarity using Louvain clustering
+1. **Clone detection and clustering**: Group cells based on barcode similarity using Louvain clustering
 2. **Backbone Construction**: Build a coarse tree structure connecting cell groups
 3. **Local Refinement**: For each group, perform local search to optimize subtree topology using:
    - Barcode likelihood
    - Spatial proximity (cells closer in space are more likely to be related)
    - State transitions (following the provided state lineage network)
 4. **Tree Assembly**: Combine the backbone and refined subtrees into the final lineage tree
+5. **Ancestral state and spatial location inference** Run the likelihood function on the final tree to infer ancestral cells' spatiotemporal information.
 
+## Reproducibility
+1. Benchmark on simulated datasets can be found in the vignette: [SpaTedSim benchmark](vignettes/Run_benchmark.Rmd)
+2. Testing LineageMap on baseMEMOIR datasets can be found in the vignette: [baseMEMOIR test](vignettes/test_intmemoir.Rmd)
+
+## Method Overview
 
 ## License
 
